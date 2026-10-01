@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { DATA_DIR, IS_DEV_COPY, addPlan, loadPlans, removePlan, updatePlan } from "./store.ts";
+import { secureDataDir } from "./dataDir.ts";
 import { resolveBin, runEngine } from "./engines/index.ts";
 import { conversationStore, forgetAccount, linkShared, ownLoginArgs } from "./accounts.ts";
 import {
@@ -638,6 +639,7 @@ function createWindow(): void {
 
 app.whenReady().then(() => {
   if (HIDDEN) app.dock?.hide();
+  secureDataDir();
   loadChats();
   onUsageChange((all) => mainWindow?.webContents.send("usage:update", all));
   // the plans that can be asked directly, now and every ten minutes

@@ -136,10 +136,11 @@ or use its ⋯ menu (also right-click). The list and its order are saved in
 
 ## Your data
 
-Everything the app keeps is in `~/.coding-plan-hub`: plans
-(`plans.json`, created with defaults on first run), chats, added accounts'
-homes, the browser profile, usage, and settings. `installed` in `plans.json`
-is checked at runtime, so editing it by hand has no effect.
+Everything the app keeps is in `~/.coding-plan-hub`, which only your user
+account can open: plans (`plans.json`, created with defaults on first run),
+chats, added accounts' homes, the browser profile, usage, and settings.
+`installed` in `plans.json` is checked at runtime, so editing it by hand has
+no effect.
 
 ## Development
 
@@ -148,6 +149,7 @@ npm run typecheck          # both TypeScript projects
 npm run test:accounts      # account homes and shared links
 npm run test:side          # side conversations
 npm run test:auto-effort   # Auto effort
+npm run test:data-dir      # the data folder is private to you
 npm run test:chat          # UI smoke tests, run in Electron
 npm run test:questions
 npm run test:projects
@@ -181,13 +183,20 @@ your real logins, so messages it sends count against your plans.
 ## Known limits
 
 - macOS only.
-- Permission prompts are not forwarded into the UI. Each CLI handles them by
-  its own non-interactive defaults, so edits may be auto-accepted and risky
-  commands may be refused by the CLI itself.
+- Only Claude asks for permission in the app, and only on Standard access.
+  The other CLIs follow their own non-interactive rules, so edits may be
+  accepted without asking and risky commands may be refused by the CLI
+  itself.
 - opencode and qwen are not implemented yet. Their plans appear in the config
   but cannot run.
 - Chats persist across restarts. If a restart cuts off a running turn, the app
   resumes it on next launch. Turns you stopped stay stopped.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests, and how releases are
+built. Report security problems privately, as described in
+[SECURITY.md](SECURITY.md).
 
 ## License
 

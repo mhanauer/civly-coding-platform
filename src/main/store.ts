@@ -148,7 +148,7 @@ export function loadPlans(): PlanConfig[] {
   } else {
     plans = DEFAULT_PLANS.map((p) => ({ ...p, installed: false }));
     mkdirSync(DIR, { recursive: true });
-    writeFileSync(FILE, JSON.stringify(DEFAULT_PLANS, null, 2));
+    writeFileSync(FILE, JSON.stringify(DEFAULT_PLANS, null, 2), { mode: 0o600 });
   }
   // installed, loggedIn, ownLogin and email are runtime truth, never stale config
   return plans.map((p) => ({
@@ -233,7 +233,7 @@ export function addPlan(entry: {
   };
   if (ownLogin) linkShared({ ...plan, installed: false });
   mkdirSync(DIR, { recursive: true });
-  writeFileSync(FILE, JSON.stringify([...saved, plan], null, 2));
+  writeFileSync(FILE, JSON.stringify([...saved, plan], null, 2), { mode: 0o600 });
   return loadPlans();
 }
 
@@ -277,7 +277,7 @@ export function updatePlan(
     if (patch.color) out.color = patch.color;
     return out;
   });
-  writeFileSync(FILE, JSON.stringify(next, null, 2));
+  writeFileSync(FILE, JSON.stringify(next, null, 2), { mode: 0o600 });
   return loadPlans();
 }
 
@@ -288,7 +288,7 @@ export function removePlan(planId: string): PlanConfig[] {
     >;
     const next = saved.filter((p) => p.id !== planId);
     if (next.length !== saved.length) {
-      writeFileSync(FILE, JSON.stringify(next, null, 2));
+      writeFileSync(FILE, JSON.stringify(next, null, 2), { mode: 0o600 });
     }
   }
   // record the deletion even when the plan never lived in the file: default

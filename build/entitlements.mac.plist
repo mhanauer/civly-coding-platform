@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  What the release build may do under the hardened runtime that notarization
+  requires (scripts/release.mjs). Electron's JavaScript engine compiles code at
+  run time, and the browser strip brings Chrome tabs forward through
+  AppleScript, which macOS asks you to allow once.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.automation.apple-events</key>
+  <true/>
+</dict>
+</plist>
