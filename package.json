@@ -1,0 +1,49 @@
+{
+  "name": "civly-coding-platform",
+  "productName": "Civly Coding Platform",
+  "version": "0.1.0",
+  "description": "Run your AI coding subscriptions side by side through their official CLIs",
+  "private": true,
+  "license": "MIT",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "smoke": "node scripts/smoke.mts",
+    "test:side": "node --experimental-strip-types --test scripts/side-context.test.ts",
+    "test:accounts": "node --experimental-strip-types --test scripts/accounts.test.ts",
+    "test:auto-effort": "node --experimental-strip-types --test scripts/auto-effort.test.ts",
+    "test:chat": "electron scripts/chat-submit-ui-smoke.mjs",
+    "test:questions": "electron scripts/question-card-ui-smoke.mjs",
+    "test:projects": "electron scripts/project-order-ui-smoke.mjs",
+    "test:accounts-ui": "electron scripts/accounts-ui-smoke.mjs",
+    "test:browser-checks": "electron scripts/browser-checks-ui-smoke.mjs",
+    "test:settings": "electron scripts/settings-ui-smoke.mjs",
+    "package:app": "./scripts/package.sh",
+    "postinstall": "./scripts/hide-electron.sh",
+    "dev:copy": "./scripts/dev.sh",
+    "setup:hooks": "sh scripts/setup-hooks.sh",
+    "push:check": "node scripts/push-guard.mjs --dry-run"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-markdown": "^10.1.0",
+    "remark-breaks": "^4.0.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^44.0.0",
+    "electron-vite": "^5.0.0",
+    "typescript": "^5.5.0",
+    "vite": "^7.0.0"
+  }
+}
