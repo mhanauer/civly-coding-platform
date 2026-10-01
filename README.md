@@ -25,8 +25,8 @@ makes its own API calls against a subscription quota.
 ## Quick start
 
 ```bash
-git clone https://github.com/<owner>/coding-plan-hub.git
-cd coding-plan-hub
+git clone https://github.com/mhanauer/civly-coding-platform.git
+cd civly-coding-platform
 npm install
 npm run dev          # opens the app window
 ```
