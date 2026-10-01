@@ -7,6 +7,7 @@ import { claudeAdapter } from "./claude.ts";
 import { kimiAdapter } from "./kimi.ts";
 import { codexAdapter } from "./codex.ts";
 import { geminiAdapter } from "./gemini.ts";
+import { withCodeMap } from "./codeMap.ts";
 
 // Adapters are factories so every run gets fresh parsing state (stream
 // offsets, thinking timers) even when two sessions run at once.
@@ -76,10 +77,13 @@ export function runEngine(
     return { done: Promise.resolve(), cancel: () => {}, respond: () => {} };
   }
 
-  const args = [...plan.extraArgs, ...adapter.buildArgs(opts)];
+  // a code map rides in front of a new chat's first message only; a resumed
+  // chat already has it
+  const sent = opts.codeMap && !opts.resumeId ? { ...opts, prompt: withCodeMap(opts.codeMap, opts.prompt) } : opts;
+  const args = [...plan.extraArgs, ...adapter.buildArgs(sent)];
   // stdin stays open for engines that take the prompt there, so permission
   // answers can follow; it closes once the turn is done
-  const input = adapter.initialInput?.(opts);
+  const input = adapter.initialInput?.(sent);
   const proc = spawn(binPath, args, {
     cwd: opts.cwd,
     env: { ...process.env, ...engineEnv(plan) },

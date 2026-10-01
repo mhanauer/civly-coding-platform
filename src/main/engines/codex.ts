@@ -21,6 +21,8 @@ interface CodexLine {
   thread_id?: string;
   item?: CodexItem;
   message?: string;
+  // on turn.completed; input_tokens already counts the cached ones
+  usage?: { input_tokens?: number; output_tokens?: number };
 }
 
 const OUTPUT_LIMIT = 1500;
@@ -127,8 +129,10 @@ export function codexAdapter(): EngineAdapter {
 
       const item = obj.item;
       if (!item) {
-        if (obj.type === "turn.completed") emit({ kind: "done", ok: true });
-        else if (obj.type === "turn.failed") emit({ kind: "done", ok: false });
+        if (obj.type === "turn.completed") {
+          const u = obj.usage;
+          emit({ kind: "done", ok: true, tokens: u ? { input: u.input_tokens ?? 0, output: u.output_tokens ?? 0 } : undefined });
+        } else if (obj.type === "turn.failed") emit({ kind: "done", ok: false });
         return;
       }
 

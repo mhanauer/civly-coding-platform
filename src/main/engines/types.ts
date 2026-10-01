@@ -61,8 +61,16 @@ export type EngineEvent =
     }
   // plan usage the engine reported mid-run; updates the usage view, not saved
   | { kind: "usage"; windows: UsageWindow[]; limited?: boolean }
-  | { kind: "done"; ok: boolean; summary?: string }
+  // tokens: what the run used, when the engine reports it. costUsd: what it
+  // would cost at API list prices, by the engine's own estimate (Claude's)
+  | { kind: "done"; ok: boolean; summary?: string; tokens?: TokenCount; costUsd?: number }
   | { kind: "filtered"; text: string; original: string };
+
+// input counts cached and cache-written tokens too: everything the model read
+export interface TokenCount {
+  input: number;
+  output: number;
+}
 
 export interface UsageWindow {
   label: string;
@@ -94,6 +102,9 @@ export interface SendOptions {
   fullAccess?: boolean;
   // the chats' own browser (src/main/chromeBrowser.ts)
   browser?: McpServer;
+  // a map of the project's code, put in front of a new chat's first message
+  // (withCodeMap); only the code-map test in scripts/code-map sets it
+  codeMap?: string;
 }
 
 // an MCP server the app starts with a chat: a command and its arguments

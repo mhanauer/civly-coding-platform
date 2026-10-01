@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { EngineAdapter, EngineEvent, SendOptions } from "./types.ts";
+import type { EngineAdapter, EngineEvent, SendOptions, TokenCount } from "./types.ts";
 import { classifyTool } from "./steps.ts";
 import { denyMessage } from "./claudeDeny.ts";
 
@@ -36,6 +36,13 @@ const WINDOW_LABELS: Record<string, string> = {
   seven_day_sonnet: "Weekly (Sonnet)"
 };
 
+interface ModelUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+}
+
 interface StreamLine {
   type?: string;
   subtype?: string;
@@ -56,6 +63,10 @@ interface StreamLine {
   // background_tasks_changed: every background task still running
   tasks?: Array<{ task_type?: string }>;
   permission_denials?: Array<{ tool_name?: string; tool_use_id?: string; tool_input?: Record<string, unknown> }>;
+  // on a result: tokens per model, background helpers' included, and their
+  // price at API list rates
+  modelUsage?: Record<string, ModelUsage>;
+  total_cost_usd?: number;
   message?: { content?: ContentBlock[] | string };
   event?: {
     type?: string;
@@ -72,6 +83,18 @@ function snippet(value: unknown, max = 140): string {
 
 // tool output kept per step; enough to see what happened, not a log dump
 const OUTPUT_LIMIT = 1500;
+
+// A run's tokens across every model it used; undefined when the result
+// carries none (older CLI builds)
+function resultTokens(models: Record<string, ModelUsage> | undefined): TokenCount | undefined {
+  const all = Object.values(models ?? {});
+  if (all.length === 0) return undefined;
+  const sum = (pick: (m: ModelUsage) => number | undefined): number => all.reduce((n, m) => n + (pick(m) ?? 0), 0);
+  return {
+    input: sum((m) => m.inputTokens) + sum((m) => m.cacheReadInputTokens) + sum((m) => m.cacheCreationInputTokens),
+    output: sum((m) => m.outputTokens)
+  };
+}
 
 function resultText(block: ContentBlock): string {
   const c = block.content;
@@ -319,7 +342,13 @@ export function claudeAdapter(): EngineAdapter {
         }
         if (!obj.origin || obj.user_message_uuids?.includes(promptId)) promptDone = true;
         settled = true;
-        emit({ kind: "done", ok: !obj.is_error, summary: obj.result ? snippet(obj.result, 300) : undefined });
+        emit({
+          kind: "done",
+          ok: !obj.is_error,
+          summary: obj.result ? snippet(obj.result, 300) : undefined,
+          tokens: resultTokens(obj.modelUsage),
+          costUsd: typeof obj.total_cost_usd === "number" ? obj.total_cost_usd : undefined
+        });
       }
     },
 

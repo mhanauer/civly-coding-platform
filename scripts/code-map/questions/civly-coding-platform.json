@@ -1,0 +1,493 @@
+{
+  "codebase": "Civly Coding Platform",
+  "repo": "../../..",
+  "commit": "0496ddd186653d106101209586491df836cd5bad",
+  "checkedBy": "Claude (Opus 5.5) on 2026-10-01, at the owner's request: separate checker agents verified every answer against the code at this commit and fixed what was wrong. Not checked by a person.",
+  "questions": [
+    {
+      "id": "find-01",
+      "kind": "find",
+      "question": "When the plan a chat runs on hits its usage limit in the middle of a reply, where does the app choose which other plan the chat moves to?",
+      "answer": "In src/main/index.ts. pushEvent checks error events (and failed done events) against LIMIT_PATTERNS and records a match with recordLimitError in src/main/usage.ts; for a matching error event it then calls nextPlanAfterLimit. nextPlanAfterLimit takes the other installed plans from loadPlans() that are signed in or carry an ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY, and ranks them: plans that share the chat's conversation store first (conversationStore in src/main/accounts.ts), then plans on the same engine, then the rest, with plans that allUsage() marks as out (limitedUntil set) moved behind all of those. If it finds one, pushEvent calls switchPlan with it, saves the chat, and pushes the status 'Plan limit hit on X. This session now runs on Y. Send your message again.' If none is left, the chat stays on its plan.",
+      "mustMention": [
+        "nextPlanAfterLimit",
+        [
+          "pushEvent",
+          "LIMIT_PATTERNS"
+        ]
+      ],
+      "checked": true
+    },
+    {
+      "id": "find-02",
+      "kind": "find",
+      "question": "Where does the app give Claude Code a larger output-token limit when a plan points it at Z.ai's GLM models?",
+      "answer": "engineEnv in src/main/engines/index.ts. For a plan on the claude engine whose ANTHROPIC_BASE_URL matches z.ai or bigmodel.cn, and that does not already set it, it adds CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000 to the plan's environment. runEngine in the same file merges engineEnv(plan) over process.env when it spawns the CLI. It is an environment variable set at spawn time, not a command-line flag built by the Claude adapter in src/main/engines/claude.ts.",
+      "mustMention": [
+        "engineEnv",
+        "engines/index"
+      ],
+      "checked": true
+    },
+    {
+      "id": "find-03",
+      "kind": "find",
+      "question": "When Claude Code blocks a tool call on its own (the user was never asked in the chat), where does the app work out which settings rule did it and write the error message the chat shows?",
+      "answer": "It is detected in claudeAdapter's parseLine in src/main/engines/claude.ts: on a 'result' line it walks permission_denials, skips calls the user answered in the chat, and checks the failed tool result for a safety-hook error or a 'stream closed' error; for anything else it calls denyMessage in src/main/engines/claudeDeny.ts. denyMessage calls findDenyRules, which reads permissions.deny (denyRules) from every file in settingsFiles(cwd): the user's own .claude/settings.json, the chat folder's .claude/settings.json and .claude/settings.local.json, and the managed-settings.json. Each rule is matched with ruleMatches (Bash patterns through wildcard and commandParts, so each piece of a compound command is checked). The message names the matching rule and its file, or lists the files to look in when no rule matches.",
+      "mustMention": [
+        "claudeDeny",
+        "denyMessage",
+        [
+          "findDenyRules",
+          "ruleMatches"
+        ]
+      ],
+      "checked": true
+    },
+    {
+      "id": "find-04",
+      "kind": "find",
+      "question": "Where does the app check a finished reply for banned writing patterns and rewrite it in plain English, and where is that check started?",
+      "answer": "The check and rewrite are filterText in src/main/filter.ts. It calls scanText, which uses the shared scanner (scan.mjs from the no-ai-speak skill folder) when that loaded, and otherwise localScan with FALLBACK_PATTERNS (em dashes, semicolons, 'worth noting' and similar). Clean text comes back unchanged with no model call; flagged text is sent, with the rules from loadRules, to the Z.ai plan's Anthropic-style /v1/messages endpoint using glm-5.3-flash. It is started in src/main/index.ts inside startTurn's handle.done callback, when the chat's filter is on and loadSettings().replyFilter is true: it joins the turn's text events, finds a plan with a Z.ai base URL and token, and when the text changed it pushes a 'filtered' event, which ChatView in src/renderer/src/App.tsx shows with FilteredLine.",
+      "mustMention": [
+        "filterText",
+        "filter.ts",
+        "startTurn"
+      ],
+      "checked": true
+    },
+    {
+      "id": "find-05",
+      "kind": "find",
+      "question": "Where does the terminal tab in the side pane get a real interactive shell running on a pseudo-terminal?",
+      "answer": "In the main process, src/main/index.ts. The 'pty:open' IPC handler spawns python3 on a small Python bridge: the PTY_BRIDGE source, written to pty-bridge.py in the app's data folder by ensurePtyBridge. The bridge opens a pty with os.openpty, sets its size, forks the user's login shell on it, and relays bytes between the pty and its own stdin and stdout; the handler forwards output to the window on 'pty:data'. The 'pty:input', 'pty:resize' (writes an stty command) and 'pty:close' handlers do the rest. In the renderer, TerminalPane in src/renderer/src/App.tsx draws the terminal with xterm.js and calls window.hub.ptyOpen, ptyInput, ptyResize and ptyClose from src/preload/index.ts. TerminalPane's comment says the shell is bridged through macOS script, but the code uses the Python bridge.",
+      "mustMention": [
+        [
+          "ensurePtyBridge",
+          "PTY_BRIDGE",
+          "pty-bridge"
+        ],
+        [
+          "pty:open",
+          "ptyOpen"
+        ],
+        [
+          "python",
+          "openpty"
+        ]
+      ],
+      "checked": true
+    },
+    {
+      "id": "find-06",
+      "kind": "find",
+      "question": "Where does the app make a link clicked in a chat reply open in the user's own everyday Chrome, instead of inside the app window or the separate browser the chats use?",
+      "answer": "In the main process. src/main/index.ts registers an app 'web-contents-created' handler that gives every page a setWindowOpenHandler which calls openLink and denies the new window, and the main window's 'will-navigate' handler (in createWindow) cancels the navigation and calls openLink too. openLink sends mailto: links to shell.openExternal, ignores links that are not http(s), and otherwise calls openInYourChrome in src/main/chromeBrowser.ts with shell.openExternal as the fallback. openInYourChrome finds the running Chrome binary started without --user-data-dir (yourChrome, which reads ps) and hands it the URL, or starts Chrome with 'open -n -b com.google.Chrome'. In the renderer, ChatMarkdown only marks links target=_blank.",
+      "mustMention": [
+        "openLink",
+        "openInYourChrome"
+      ],
+      "checked": true
+    },
+    {
+      "id": "find-07",
+      "kind": "find",
+      "question": "Where is it decided whether a chat's light in the sidebar shows working, waiting on the user, needs attention, or done?",
+      "answer": "chatStatus in src/main/index.ts. A running chat is 'waiting' when it has pending permission requests, otherwise 'running'. For a chat that is not running it looks at the events after the last user message: a 'Stopped' status gives 'idle', any error or failed done gives 'error', a 'Plan limit hit' status gives 'error', a done gives 'done', and anything else 'idle'. summary() puts the result in each SessionSummary the 'session:list' handler returns. In the renderer, statusOf in src/renderer/src/App.tsx lets live busy flags show 'running' (with 'waiting' taking priority), and StatusLight draws the light.",
+      "mustMention": [
+        "chatStatus",
+        [
+          "main/index",
+          "main process"
+        ]
+      ],
+      "checked": true
+    },
+    {
+      "id": "find-08",
+      "kind": "find",
+      "question": "Where does an added Claude or ChatGPT subscription account get the same instructions, rules, skills and settings as the user's main CLI setup?",
+      "answer": "linkShared in src/main/accounts.ts. For a plan whose own CLI home the app created (managedHome: strictly inside the data folder's accounts directory, and not the main home reached through a link), it seeds a new Claude home's .claude.json from the main one without identity or login fields (seedClaudeState), then links every name in SHARED from the main home (.claude or .codex in the home folder) into the account's home with linkOne. For Claude the list includes CLAUDE.md, rules, skills, agents, commands, hooks, settings.json, plugins and projects; for Codex it is AGENTS.md, AGENTS.override.md, config.toml, rules, skills, prompts and plugins. linkOne also repairs a link that a CLI replaced with its own copy of the file. linkShared is called by addPlan in src/main/store.ts, by the 'plan:login' handler, and by startTurn before every turn, both in src/main/index.ts.",
+      "mustMention": [
+        "linkShared",
+        "accounts.ts"
+      ],
+      "checked": true
+    },
+    {
+      "id": "find-09",
+      "kind": "find",
+      "question": "Where does the app refresh the list of models offered for a plan from what the installed CLIs know about on this machine?",
+      "answer": "discoverModels in src/main/engines/models.ts, called only from loadPlans in src/main/store.ts. discoverModels (cached for 10 minutes per plan) reads Claude Code's cache/model-catalog files in the plan's CLI home (claudeCatalog), Codex's models_cache.json (codexCatalog), Kimi's config.toml (kimiCatalog), or model ids found in the Gemini CLI's package bundle (geminiCatalog); for a Claude key plan with a base URL and token it asks the provider's /v1/models with curl (zaiFetch). pickModels keeps the newest model per family, using parseModel to split family and version; opencode and qwen plans get nothing. loadPlans only does this once plans.json exists, and only for a plan with no saved model list (missing, empty, or the 'default' placeholder, as an added account starts with); a plan with an explicit list keeps it. It uses the result only when it has exactly 2 models (3 for Codex) and otherwise falls back to the defaults, keeps the built-in ChatGPT plan's fixed pair without asking, and puts the Sol model first for Codex plans (solFirst).",
+      "mustMention": [
+        "discoverModels",
+        "loadPlans"
+      ],
+      "checked": true
+    },
+    {
+      "id": "find-10",
+      "kind": "find",
+      "question": "Where does the app read how much of a ChatGPT (Codex) subscription's limits are used, along with its purchased credits and available limit resets?",
+      "answer": "readCodexAccountUsage in src/main/codexAccountUsage.ts starts the Codex CLI's 'app-server' with CODEX_HOME set to the plan's home, sends a JSON-RPC 'initialize', then 'initialized' and 'account/rateLimits/read', and passes the result to parseCodexAccountUsage, which builds the usage windows (codexWindowLabel), credits, resets and a limited flag. It gives up after 10 seconds and returns null on any failure. It is called by refreshCodex in src/main/usage.ts, which stores the result and falls back to refreshCodexFromSession (the rate_limits in the newest session .jsonl under the home's sessions folder) when the app-server returns nothing. refreshCodex runs from refreshPlanUsage (the startup poll every 10 minutes and the 'usage:refresh' handler) and from refreshAfterTurn in src/main/index.ts after a Codex chat's turn.",
+      "mustMention": [
+        "readCodexAccountUsage",
+        [
+          "app-server",
+          "rateLimits/read"
+        ]
+      ],
+      "checked": true
+    },
+    {
+      "id": "describe-01",
+      "kind": "describe",
+      "question": "What does the function `mergeDeltas` do, and what calls it?",
+      "answer": "It turns a chat's raw event list into display events (it lives in src/renderer/src/chatFlow.ts). Consecutive 'delta' chunks are joined into one 'text' event; a run still open at the end is marked streaming: true. When a finished 'text' event starts with the streamed run, it replaces the run and is marked fromStream, so it does not type in again. Consecutive 'thinking_delta' events collapse into one live 'thinking' item (a delta carrying startedAt starts a new one), which the finished 'thinking' event replaces while keeping the start time. Its only caller is ChatView in src/renderer/src/App.tsx, inside a useMemo over the chat's events; the result goes on to buildFlow.",
+      "mustMention": [
+        "ChatView",
+        "App.tsx"
+      ],
+      "checked": true
+    },
+    {
+      "id": "describe-02",
+      "kind": "describe",
+      "question": "What does the function `newestWithin` do, and what calls it?",
+      "answer": "Given a list of recap lines and a character limit, it builds text from the newest line backwards, keeping as many of the newest lines as fit (returned oldest first, separated by blank lines), and returns { text, cut }, where cut is true when older lines were left out. If even the newest line alone is too long, it keeps that line's start, cut to the limit with an ellipsis, so a non-empty list never gives an empty result. It lives in src/main/recap.ts. Callers: recap() in src/main/index.ts (with RECAP_LIMIT 24000, for the recap startTurn sends when a chat moved to a plan that cannot resume its conversation) and sideContext() in src/main/recap.ts (with SIDE_CONTEXT_LIMIT 40000, for side conversations). scripts/side-context.test.ts also tests it.",
+      "mustMention": [
+        "sideContext",
+        [
+          "main/index",
+          "RECAP_LIMIT",
+          "recap()"
+        ]
+      ],
+      "checked": true
+    },
+    {
+      "id": "describe-03",
+      "kind": "describe",
+      "question": "What does the function `classifyTool` do, and what calls it?",
+      "answer": "It turns one engine tool call (tool name plus input) into a ToolStep the chat can display (it lives in src/main/engines/steps.ts). It lowercases the name, strips an mcp__<server>__ prefix, and maps by name: todo tools to a 'todo' Plan step with the todo list; read tools to an 'explore' Read step; search tools to an 'explore' Search step (search: true); shell tools to a 'terminal' step with the command unwrapped by unwrapShell; edit tools to an 'edit' step with added and removed line counts (lineDelta) and a diff (diffLines); write tools to an 'edit' Write step; web tools to a 'web' Fetch or Web search step; task and agent to an 'agent' step; anything else to an 'other' step labelled with the tool name and its most telling field. Callers: claudeAdapter's parseLine in src/main/engines/claude.ts (for permission requests and tool_use blocks), kimiAdapter's parseLine in src/main/engines/kimi.ts (tool_use blocks and OpenAI-style tool_calls), and classifyLegacy in the same steps.ts, which buildFlow in src/renderer/src/chatFlow.ts uses for tool events saved without a step. The Codex adapter builds its own steps and does not call it.",
+      "mustMention": [
+        [
+          "claude.ts",
+          "claudeAdapter"
+        ],
+        [
+          "kimi.ts",
+          "kimiAdapter"
+        ],
+        "classifyLegacy"
+      ],
+      "checked": true
+    },
+    {
+      "id": "describe-04",
+      "kind": "describe",
+      "question": "What does the function `resolveBin` do, and what calls it?",
+      "answer": "It turns a CLI name into an absolute path, so engines run even when the app was opened from the Dock with a bare PATH (it lives in src/main/engines/index.ts). It runs 'which <bin>' and takes the first line; failing that, it checks each folder from userBinDirs() in src/main/shellPath.ts (.local/bin, .npm-global/bin and .kimi-code/bin under the home folder, plus /opt/homebrew/bin and /usr/local/bin) for an existing file; otherwise it returns the name unchanged. Callers (seven): runEngine and binaryExists in src/main/engines/index.ts, geminiCatalog in src/main/engines/models.ts, browserServer in src/main/chromeBrowser.ts (to find npx), refreshCodex in src/main/usage.ts (the codex binary for readCodexAccountUsage), and in src/main/index.ts the 'plans:delete' handler (the binary passed to forgetAccount) and the 'plan:login' handler.",
+      "mustMention": [
+        "runEngine",
+        "binaryExists",
+        [
+          "geminiCatalog",
+          "browserServer",
+          "refreshCodex",
+          "plan:login",
+          "plans:delete",
+          "forgetAccount",
+          "chromeBrowser",
+          "engines/models",
+          "main/usage"
+        ]
+      ],
+      "checked": true
+    },
+    {
+      "id": "describe-05",
+      "kind": "describe",
+      "question": "What does the function `conversationStore` do, and what calls it?",
+      "answer": "It returns a key for the place a plan's CLI keeps its conversations, so the app can tell whether two plans can resume each other's conversations (it lives in src/main/accounts.ts). Every Claude plan with no own home, or with a home the app manages (which links the main projects folder), returns 'claude'; any other plan returns '<engine>:<its CLI home>', so each ChatGPT account with its own CODEX_HOME is separate. Callers, both in src/main/index.ts: nextPlanAfterLimit (ranks plans in the same store first when a usage limit forces a move) and switchPlan (when the store changes and the chat already has messages, it drops resumeId and sets handoff so the next turn carries a recap). scripts/accounts.test.ts also tests it.",
+      "mustMention": [
+        "nextPlanAfterLimit",
+        "switchPlan"
+      ],
+      "checked": true
+    },
+    {
+      "id": "describe-06",
+      "kind": "describe",
+      "question": "What does the function `recordUsage` do, and what calls it?",
+      "answer": "It saves a plan's latest usage windows (it lives in src/main/usage.ts). It keeps the previous windows if the new list is empty; when limited is true it sets limitedUntil to the latest reset time among windows at 100% (falling back to the previous value, or 0 when unknown), otherwise it clears it; and it stamps updatedAt. Then save() writes usage.json in the data folder and calls the onChange listener, which the main process registered with onUsageChange to send 'usage:update' to the window. Callers: pushEvent in src/main/index.ts (for 'usage' events, which the Claude adapter emits from rate_limit_event lines), and, in src/main/usage.ts, the pollers refreshZai, refreshOpenRouter and refreshCodexFromSession. refreshCodex writes its account data directly and reaches recordUsage only through its refreshCodexFromSession fallback.",
+      "mustMention": [
+        "pushEvent",
+        [
+          "refreshZai",
+          "refreshOpenRouter",
+          "refreshCodexFromSession"
+        ]
+      ],
+      "checked": true
+    },
+    {
+      "id": "describe-07",
+      "kind": "describe",
+      "question": "What does the function `loadSettings` do, and what calls it?",
+      "answer": "It reads settings.json from the app's data folder and returns the three optional features: replyFilter, devBranch and zcodeProjects (it lives in src/main/settings.ts). It starts from defaults with all three off and copies only boolean values from the file; a missing or broken file leaves everything off. Callers: saveSettings in src/main/settings.ts (to merge a patch), and in src/main/index.ts: allProjects (adds ZCode's recent projects when zcodeProjects is on), the 'projects:ensure-dev' handler (devBranch), the 'settings:get' handler, and startTurn's end-of-turn callback (replyFilter, to decide whether to run filterText).",
+      "mustMention": [
+        "saveSettings",
+        "allProjects",
+        "startTurn",
+        [
+          "settings:get",
+          "getSettings",
+          "projects:ensure-dev",
+          "ensure-dev"
+        ]
+      ],
+      "checked": true
+    },
+    {
+      "id": "describe-08",
+      "kind": "describe",
+      "question": "What does the function `stopRun` do, and what calls it?",
+      "answer": "It stops a chat's running turn and waits for the engine process to exit, so the next turn can resume the same conversation (it lives in src/main/index.ts). If the session is not running or has no handle it returns true. Otherwise it calls handle.cancel() (runEngine's cancel, which sends SIGTERM to the CLI) and races handle.done against an 8-second timer: true if the engine exited, false if not. Callers, all IPC handlers in src/main/index.ts: 'session:steer', 'session:edit-last' and 'session:queue-send-now'; each returns a 'did not stop in time' error when it gets false. The Stop button's 'session:cancel' handler does not use it; it cancels the handle directly.",
+      "mustMention": [
+        [
+          "session:steer",
+          "steer handler",
+          "steer ipc",
+          "steer,",
+          "steer and",
+          "\"steer\"",
+          "'steer'",
+          "`steer`"
+        ],
+        [
+          "session:edit-last",
+          "edit-last",
+          "editLast",
+          "edit last"
+        ],
+        [
+          "session:queue-send-now",
+          "queue-send-now",
+          "queueSendNow",
+          "send now",
+          "send-now"
+        ]
+      ],
+      "checked": true
+    },
+    {
+      "id": "describe-09",
+      "kind": "describe",
+      "question": "What does the function `resolveEffort` do, and what calls it?",
+      "answer": "It picks the effort level one message runs at (it lives in src/main/autoEffort.ts). If the picked level is anything other than 'auto', it is returned unchanged. Under 'auto', if isHousekeeping(prompt) is true (a short single-line message such as thanks, commit, push, open the PR, or a status check, optionally after an 'ok,' or 'great!') and the user's usual level ranks above 'medium', it returns 'medium'; otherwise it returns the usual level. Its caller is startTurn in src/main/index.ts, which passes engineDefaultEffort(engine) as the usual level (effortLevel from the user's Claude settings.json or model_reasoning_effort from the Codex config.toml, defaulting to 'high'); the result is passed to runEngine as the effort and recorded on the user event when Auto was picked. scripts/auto-effort.test.ts also tests it.",
+      "mustMention": [
+        "isHousekeeping",
+        "startTurn",
+        "medium"
+      ],
+      "checked": true
+    },
+    {
+      "id": "describe-10",
+      "kind": "describe",
+      "question": "What does `onSessionEvent` do, and what calls it?",
+      "answer": "It is part of the window.hub API that src/preload/index.ts exposes to the page with contextBridge. It adds a listener on the 'session:event' IPC channel, calls the callback with each { sessionId, event } payload, and returns a function that removes the listener. The main process sends on that channel from pushEvent in src/main/index.ts. Its caller is the App component in src/renderer/src/App.tsx, in the startup useEffect that also runs bootstrap: the callback appends the event to that chat's transcript (an echoed user message lands on the one already shown instead of adding a second bubble), marks the chat busy on 'user' events and not busy on 'done', and refreshes the session list on 'permission', 'permission_decision' and 'done'.",
+      "mustMention": [
+        "session:event",
+        [
+          "App.tsx",
+          "App component",
+          "`App`"
+        ]
+      ],
+      "checked": true
+    },
+    {
+      "id": "trace-01",
+      "kind": "trace",
+      "question": "What happens, step by step, when the user types a message in an existing chat and presses Enter, until the engine's reply shows in the window?",
+      "answer": "1. Composer's onKeyDown in src/renderer/src/App.tsx calls onSend, which runs App's sendSession(box): it builds the text with buildPrompt (adding attached file paths), clears the box, marks the chat busy and calls window.hub.send. 2. send in src/preload/index.ts invokes the 'session:send' IPC channel; its handler in src/main/index.ts checks the chat exists, is not running and the text is not empty, then calls startTurn. 3. startTurn adds any plan-switch note, handoff recap and side-conversation context, picks the effort with resolveEffort, records the user message with pushEvent, and calls runEngine with pushEvent as the event callback. 4. runEngine in src/main/engines/index.ts spawns the engine's CLI with the arguments its adapter builds and feeds each stdout line to the adapter's parseLine, which emits EngineEvents (text deltas, tool steps, the result). 5. Each event goes to pushEvent, which adds it to the transcript, saves the chat (persistSoon or persistChat) and sends it to the window on 'session:event'. 6. App's onSessionEvent listener appends it to that chat's transcript, and ChatView groups it with mergeDeltas and buildFlow and renders the reply. When the CLI exits, runEngine sends the final 'done' event, which ends the busy state, and startTurn's handle.done callback runs the reply filter, the next queued message and notifications.",
+      "mustMention": [
+        [
+          "sendSession",
+          "session:send"
+        ],
+        "startTurn",
+        "runEngine",
+        "pushEvent"
+      ],
+      "checked": true
+    },
+    {
+      "id": "trace-02",
+      "kind": "trace",
+      "question": "What happens, step by step, when Claude Code asks for permission to use a tool during a reply and the user clicks Allow?",
+      "answer": "1. Claude Code writes a control_request line with subtype can_use_tool; claudeAdapter's parseLine in src/main/engines/claude.ts turns it into a 'permission' event with the request id, tool, input, a step from classifyTool and any 'addRules' suggestions. 2. runEngine passes it to pushEvent in src/main/index.ts, which stores the request in session.pending, calls notify ('Needs permission: ...'), saves the chat and sends the event to the window on 'session:event'. 3. App's onSessionEvent listener adds it to the chat; buildFlow in src/renderer/src/chatFlow.ts makes a 'permission' item that ChatView renders as a PermissionCard. 4. Clicking Allow calls onAnswer(true, false) through useCardAnswer's send; App's answerPermission calls window.hub.answerPermission in src/preload/index.ts, which invokes 'session:permission'. 5. That handler in src/main/index.ts finds the pending request and calls session.handle.respond(requestId, true, input), passing the saved suggestions only for Always allow. 6. runEngine's respond calls the adapter's permissionResponse, which builds a control_response with behavior 'allow' and updatedInput, and writes it to the CLI's stdin, which the Claude adapter keeps open for this (inputDone). 7. The handler pushes a 'permission_decision' event (pushEvent removes the request from pending) and calls sendSessions; buildFlow attaches the decision to the card, which shows 'Allowed'.",
+      "mustMention": [
+        [
+          "claude.ts",
+          "claudeAdapter",
+          "can_use_tool",
+          "control_request"
+        ],
+        "PermissionCard",
+        [
+          "session:permission",
+          "answerPermission"
+        ],
+        [
+          "permissionResponse",
+          "control_response"
+        ]
+      ],
+      "checked": true
+    },
+    {
+      "id": "trace-03",
+      "kind": "trace",
+      "question": "What happens, step by step, when the user presses Enter on a new message while a reply is still running and the message box is set to redirect the running reply rather than wait for it?",
+      "answer": "1. Composer's onKeyDown in src/renderer/src/App.tsx, with the chat busy and busyMode 'steer', calls onSteer; ChatView scrolls to the latest message and App's steerSession(box) builds the text with buildPrompt, clears the box, and calls window.hub.steer. 2. The preload invokes 'session:steer'. 3. The 'session:steer' handler in src/main/index.ts (which just calls startTurn when nothing is running) sets session.steering and calls stopRun. 4. stopRun calls handle.cancel(), runEngine's cancel, which sends SIGTERM to the CLI, and waits up to 8 seconds for handle.done; if the engine does not stop, the handler returns an error and steerSession puts the text back in the box. 5. When the old turn ends, startTurn's handle.done callback sees session.steering and returns early: no filter, no notification, no queued message. 6. The handler builds the engine prompt: with no resumeId yet it includes the interrupted request ('My earlier request, which I interrupted...'), otherwise '[I interrupted your previous reply to steer...]'. 7. It pushes an 'Interrupted to steer' status with pushEvent and calls startTurn(session, prompt, enginePrompt), which resumes the same engine conversation through resumeId; finally steering is cleared.",
+      "mustMention": [
+        [
+          "steerSession",
+          "onSteer"
+        ],
+        "session:steer",
+        "stopRun",
+        "startTurn"
+      ],
+      "checked": true
+    },
+    {
+      "id": "trace-04",
+      "kind": "trace",
+      "question": "What happens, step by step, when the user types a message while a reply is running and the app is set to hold it until that reply finishes?",
+      "answer": "1. Composer's onKeyDown in src/renderer/src/App.tsx, with the chat busy and busyMode 'queue', calls onQueue; App's queueSession(box) builds the text with buildPrompt, clears the box and calls window.hub.queueAdd. 2. The preload invokes 'session:queue-add'. 3. The handler in src/main/index.ts starts the turn at once with startTurn if the chat is neither running nor steering; otherwise it pushes the text onto session.queue, saves the chat with persistChat and calls sendSessions ('sessions:changed'). 4. The renderer refreshes its session list (refreshSessions, also from the onSessionsChanged listener), and ChatView lists the queued message with 'Send now' and remove buttons. 5. When the running reply ends, startTurn's handle.done callback runs the reply filter first, then checks the finished turn: if its last 'done' was ok, it was not stopped, and no new turn has started, it shifts the first queued message off the queue, saves, and calls startTurn(session, next). 6. If the turn was stopped or failed, the queue stays on hold; for a failed turn the error notification says how many queued messages are on hold.",
+      "mustMention": [
+        [
+          "queueSession",
+          "onQueue"
+        ],
+        [
+          "session:queue-add",
+          "queueAdd"
+        ],
+        "startTurn"
+      ],
+      "checked": true
+    },
+    {
+      "id": "trace-05",
+      "kind": "trace",
+      "question": "What happens, step by step, when the user quits the app while a chat is in the middle of a reply, and then opens the app again?",
+      "answer": "1. Quitting fires Electron's 'before-quit', which src/main/index.ts wires to rememberInterruptedTurns (relaunch() for an in-app update also calls it). 2. rememberInterruptedTurns calls flushSaves to write pending output, then for each running chat whose latest turn was not stopped by the user, sets session.restartTurn to the last user message, saves it with persistChat, and cancels the engine through its handle. 3. On the next launch, app.whenReady calls loadChats, which reads each saved chat file and restores restartTurn when it has a prompt. 4. After createWindow, a setTimeout runs resumeRestartedTurns, which for each chat with a restartTurn that is not running clears it, pushes a 'Resuming after app restart' status with pushEvent, and builds the engine prompt: 'The app restarted while you were working. Continue and finish...' when the chat has a resumeId, otherwise a note followed by the original request text. 5. It calls startTurn(session, prompt, enginePrompt, { recordUser: false }), so the engine picks the work back up without a second copy of the user's message in the chat.",
+      "mustMention": [
+        "rememberInterruptedTurns",
+        "restartTurn",
+        "resumeRestartedTurns"
+      ],
+      "checked": true
+    },
+    {
+      "id": "trace-06",
+      "kind": "trace",
+      "question": "What happens, step by step, when the user opens a new side conversation next to an existing chat and sends its first message, and how does that side conversation's engine learn what the main chat has been doing?",
+      "answer": "1. Choosing a chat tab in the side pane runs openPane('chat') in src/renderer/src/App.tsx, which opens a not-yet-started tab whose ChatView sends with startSide. 2. startSide builds the text with buildPrompt and calls window.hub.createSession with side: true and parentId set to the open chat, then shows the message, makes the new session the tab's own, and calls window.hub.send. 3. The 'session:create' handler in src/main/index.ts creates the Session with side and parentId; the 'session:send' handler then calls startTurn. 4. startTurn calls besideContext, which finds the parent chat, saves it first if a save is pending (persistChat), and calls sideContext in src/main/recap.ts with the parent's title, plan label, folder, running state, transcript and chat file path; because the side conversation has no resumeId yet, seen is undefined and the whole chat is used. 5. sideContext runs recapLines(transcript, true) (messages and replies plus the latest turn's recent tool steps and errors) and newestWithin with SIDE_CONTEXT_LIMIT, and adds a '[Note from the app: this is a side conversation...]' header that also points at the chat's full file. 6. besideContext records parentSeen as the parent's transcript length, and startTurn puts the context before 'My message:' and calls runEngine. Once the side conversation has its own resumeId, later messages carry only what happened in the parent chat since parentSeen.",
+      "mustMention": [
+        [
+          "startSide",
+          "parentId"
+        ],
+        "besideContext",
+        "sideContext",
+        [
+          "recapLines",
+          "parentSeen",
+          "newestWithin"
+        ]
+      ],
+      "checked": true
+    },
+    {
+      "id": "trace-07",
+      "kind": "trace",
+      "question": "What happens, step by step, from Claude Code reporting the account's current 5-hour and weekly usage during a reply to the usage bars in the window updating?",
+      "answer": "1. claudeAdapter's parseLine in src/main/engines/claude.ts reads a rate_limit_event line and emits a 'usage' event with one window per unified window (5-hour, Weekly, ...), usedPct from utilization, resetsAt in milliseconds, and limited when the status is 'rejected'. 2. runEngine in src/main/engines/index.ts forwards it to pushEvent in src/main/index.ts. 3. pushEvent sees kind 'usage', calls recordUsage(plan id, windows, limited) and returns, so the event is neither saved in the chat nor sent as a session event. 4. recordUsage in src/main/usage.ts updates the plan's entry (with limitedUntil when limited), and save() writes usage.json and calls the onChange listener. 5. That listener, registered in app.whenReady with onUsageChange, sends 'usage:update' with allUsage() to the window. 6. onUsageUpdate in src/preload/index.ts hands it to App's listener in src/renderer/src/App.tsx, which calls setUsage; UsageBars in Accounts, UsageDashboard, and the plan picker's usageNote redraw with the new numbers.",
+      "mustMention": [
+        "rate_limit_event",
+        "pushEvent",
+        "recordUsage",
+        [
+          "usage:update",
+          "onUsageUpdate",
+          "onUsageChange"
+        ]
+      ],
+      "checked": true
+    },
+    {
+      "id": "trace-08",
+      "kind": "trace",
+      "question": "What happens, step by step, when the user switches an existing chat from a Claude plan to a ChatGPT plan with the plan picker and then sends the next message?",
+      "answer": "1. The Plan select in Composer (src/renderer/src/App.tsx) calls onPlanChange, which ChatView turns into onPatch({ planId }); App's patchSession updates the list right away and calls window.hub.updateSession. 2. The 'session:update' handler in src/main/index.ts refuses while a reply runs, loads the plan with loadPlans and calls switchPlan. 3. switchPlan records switchedFrom (the old plan's label), sets the new plan and its first model, clears the effort because the engine changed, and, since conversationStore (src/main/accounts.ts) differs between the Claude store and the Codex home, drops resumeId and sets handoff. 4. The handler pushes the status 'Switched from X to Y. Your next message brings it up to speed on this chat.' and saves with persistChat. 5. On the next send, startTurn adds a '[Note from the app: this chat now runs on the ... plan ...]' line and, because handoff is set, builds recap(session), which is newestWithin(recapLines(transcript), RECAP_LIMIT) from src/main/recap.ts, wrapping the message as 'We are continuing a conversation that started with another assistant...'; then it clears handoff. 6. runEngine starts the Codex adapter with no resume id, so buildArgs runs 'codex exec --json' as a new thread, and the thread.started id becomes the chat's new resumeId.",
+      "mustMention": [
+        "switchPlan",
+        "conversationStore",
+        [
+          "resumeId",
+          "resume id"
+        ],
+        [
+          "handoff",
+          "recap"
+        ]
+      ],
+      "checked": true
+    },
+    {
+      "id": "trace-09",
+      "kind": "trace",
+      "question": "What happens, step by step, when the user adds a new ChatGPT subscription in the Accounts screen, up to the sign-in window opening?",
+      "answer": "1. The add button in the Accounts modal (src/renderer/src/App.tsx) calls addAccount; accountOwnLogin is true for the codex engine, so it calls window.hub.createPlan with ownLogin: true. 2. The preload invokes 'plans:create'; the handler in src/main/index.ts checks the engine name and calls addPlan in src/main/store.ts. 3. addPlan names the account (the typed label, or 'ChatGPT account', numbered if taken), makes an id from the label, and calls newAccountEnv in src/main/accounts.ts, which creates an accounts/<id> folder in the data folder and returns { CODEX_HOME: that folder }. 4. addPlan calls linkShared to link the main Codex home's shared files (AGENTS.md, config.toml, rules, skills, ...) into the new home, writes plans.json, and returns loadPlans(). 5. Back in App, addAccount finds the new plan and calls window.hub.loginPlan, invoking 'plan:login'. 6. That handler gets ownLoginArgs (CODEX_HOME plus the 'login' command), runs linkShared again, writes a login-<id>.command script that exports CODEX_HOME and runs the codex login command, and opens it with 'open', so a Terminal window runs the sign-in. When the app window regains focus, the Accounts screen calls listPlans again, and loadPlans (engineLoggedIn, through ownHomeLoggedIn checking for auth.json in that home) shows whether the sign-in worked.",
+      "mustMention": [
+        [
+          "addAccount",
+          "createPlan",
+          "plans:create"
+        ],
+        "addPlan",
+        [
+          "newAccountEnv",
+          "CODEX_HOME"
+        ],
+        [
+          "plan:login",
+          "loginPlan"
+        ]
+      ],
+      "checked": true
+    },
+    {
+      "id": "trace-10",
+      "kind": "trace",
+      "question": "What happens, step by step, when a page in the chats' browser stops on a CAPTCHA during a running chat, until the user clicks to bring that tab up?",
+      "answer": "1. At startup, app.whenReady in src/main/index.ts calls watchBrowserChecks (src/main/browserChecks.ts) with the DevTools endpoint, an active() test (some running chat is on an engine that usesBrowser), and onChange and onNew callbacks. 2. Its loop runs tick every 3 seconds; while active it opens a DevTools connection (Cdp.open), lists the page targets (Target.getTargets), and for each http(s) page calls detect, which attaches to the page and runs the DETECT script with Runtime.evaluate, getting back 'captcha', 'bot-check' or 'sign-in'. 3. A check has to stay for SETTLE_MS (8 seconds) before publish passes it on: onChange gets the full list and onNew gets the checks not reported before. 4. onChange in src/main/index.ts stores the list in browserChecks and sends 'browser:checks' to the window; onNew calls notifyBrowserChecks, which (unless the app is focused) shows one macOS notification listing the sites and bounces the Dock icon. 5. In the renderer, onBrowserChecks from src/preload/index.ts updates App's browserChecks state, and a strip above the chat shows a button for each check. 6. Clicking that button calls window.hub.showBrowserCheck, invoking 'browser:show-check'; clicking the notification calls showCheck directly. 7. showCheck in src/main/browserChecks.ts activates the target, brings the page to the front (Page.bringToFront), and raises the chats' Chrome by its process id through osascript (NSRunningApplication).",
+      "mustMention": [
+        "watchBrowserChecks",
+        [
+          "notifyBrowserChecks",
+          "browser:checks",
+          "onBrowserChecks"
+        ],
+        "showCheck"
+      ],
+      "checked": true
+    }
+  ]
+}

@@ -15,6 +15,7 @@
     "test:accounts": "node --experimental-strip-types --test scripts/accounts.test.ts",
     "test:auto-effort": "node --experimental-strip-types --test scripts/auto-effort.test.ts",
     "test:data-dir": "node --experimental-strip-types --test scripts/data-dir.test.ts",
+    "test:code-map": "node --experimental-strip-types --test scripts/code-map.test.ts",
     "test:chat": "electron scripts/chat-submit-ui-smoke.mjs",
     "test:scroll": "electron scripts/chat-scroll-ui-smoke.mjs",
     "test:questions": "electron scripts/question-card-ui-smoke.mjs",
@@ -27,7 +28,9 @@
     "postinstall": "./scripts/hide-electron.sh",
     "dev:copy": "./scripts/dev.sh",
     "setup:hooks": "sh scripts/setup-hooks.sh",
-    "push:check": "node scripts/push-guard.mjs --dry-run"
+    "push:check": "node scripts/push-guard.mjs --dry-run",
+    "code-map": "node --experimental-strip-types scripts/code-map/build-map.ts",
+    "code-map:run": "node --experimental-strip-types scripts/code-map/run.ts"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
@@ -44,6 +47,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^5.2.0",
+    "@vscode/tree-sitter-wasm": "^0.3.1",
     "electron": "^44.0.0",
     "electron-vite": "^5.0.0",
     "typescript": "^5.5.0",
