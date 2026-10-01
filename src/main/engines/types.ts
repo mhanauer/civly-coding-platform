@@ -22,7 +22,8 @@ export type EngineEvent =
   // replaced: the user edited this message; it stays in history, struck out.
   // effort: the level Auto picked for this message
   | { kind: "user"; text: string; replaced?: boolean; effort?: string }
-  | { kind: "session"; engineSessionId: string }
+  // servers: the MCP servers the engine connected for this run (Claude)
+  | { kind: "session"; engineSessionId: string; servers?: string[] }
   | { kind: "status"; text: string }
   | { kind: "text"; text: string; streaming?: boolean; fromStream?: boolean }
   | { kind: "delta"; text: string }
@@ -102,6 +103,9 @@ export interface SendOptions {
   fullAccess?: boolean;
   // the chats' own browser (src/main/chromeBrowser.ts)
   browser?: McpServer;
+  // start without the user's connectors, skills and slash commands: only
+  // the browser above stays (leanChats.ts)
+  lean?: boolean;
   // a map of the project's code, put in front of a new chat's first message
   // (withCodeMap); only the code-map test in scripts/code-map sets it
   codeMap?: string;

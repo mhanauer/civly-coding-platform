@@ -1,7 +1,8 @@
 // Real renderer and preload, with fixture IPC: Settings turns the features
 // built for one setup on and off (src/main/settings.ts). Each chat's Filter
-// control shows only with the plain-English filter on, and the project
-// settings take effect without a restart.
+// control shows only with the plain-English filter on, a Claude chat's Tools
+// control only with lean chats on, and the project settings take effect
+// without a restart.
 // CPH_TEST_APP_ROOT can point to an extracted or packaged app to test its build.
 // CPH_TEST_SCREENSHOT=<file.png> saves the window with Settings open.
 import { app, BrowserWindow, ipcMain } from "electron";
@@ -17,11 +18,12 @@ const session = {
   id: "settings-fixture", cwd: "/work/app", title: "Settings fixture",
   planId: "fixture", planLabel: "Claude Max", planEngine: "claude",
   color: "#c9baf0", model: "fixture", effort: "high", defaultEffort: "high",
-  fullAccess: false, filter: true, running: false, status: "done", empty: false,
+  fullAccess: false, filter: true, tools: "auto", autoFull: false, running: false, status: "done", empty: false,
   side: false, queue: [], createdAt: Date.now(), updatedAt: Date.now()
 };
-let settings = { replyFilter: false, devBranch: false, zcodeProjects: false };
+let settings = { replyFilter: false, devBranch: false, zcodeProjects: false, leanChats: false };
 const saved = [];
+const patched = [];
 const calls = { list: 0, ensureDev: 0 };
 const handlers = {
   "plans:list": () => [{ id: "fixture", label: session.planLabel, engine: "claude", installed: true, models: ["fixture"] }],
@@ -38,6 +40,11 @@ const handlers = {
   "session:list": () => [session], "session:transcript": () => [{ kind: "user", text: "Hello there" }],
   "ui:active-chat": () => undefined, "update:status": () => ({ ready: false, waiting: false }),
   "browser:checks": () => [],
+  "session:update": (_event, _id, patch) => {
+    patched.push(patch);
+    Object.assign(session, patch);
+    return { summary: session };
+  },
   "settings:get": () => settings,
   "settings:set": (_event, patch) => {
     saved.push(patch);
@@ -78,6 +85,7 @@ app.whenReady().then(async () => {
     }
   };
   const hasFilterControl = "Array.from(document.querySelectorAll('.ctl-label')).some(l => l.textContent === 'Filter')";
+  const toolsSelect = "Array.from(document.querySelectorAll('.ctl-group')).find(g => g.querySelector('.ctl-label')?.textContent === 'Tools')?.querySelector('select')";
   const toggle = (label) =>
     evaluate(`Array.from(document.querySelectorAll('.setting-row')).find(r => r.textContent.includes(${JSON.stringify(label)})).querySelector('input').click()`);
   const timeout = setTimeout(() => { console.error("Settings test timed out"); app.exit(1); }, 60_000);
@@ -87,20 +95,40 @@ app.whenReady().then(async () => {
     await evaluate("document.querySelector('.session-open').click()");
     await waitFor("document.querySelector('.transcript')?.textContent.includes('Hello there')");
 
-    await check("a chat has no Filter control while the filter is off", async () => {
+    await check("a chat has no Filter or Tools control while those settings are off", async () => {
       assert.equal(await evaluate(hasFilterControl), false);
+      assert.equal(await evaluate(`Boolean(${toolsSelect})`), false);
     });
 
     await check("Settings opens with everything off", async () => {
       await evaluate("Array.from(document.querySelectorAll('.usage-btn')).find(b => b.textContent === 'Settings').click()");
-      await waitFor("document.querySelectorAll('.setting-row').length === 3", "the three settings");
-      assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.setting-row input')).map(i => i.checked)"), [false, false, false]);
+      await waitFor("document.querySelectorAll('.setting-row').length === 4", "the four settings");
+      assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.setting-row input')).map(i => i.checked)"), [false, false, false, false]);
+    });
+
+    await check("turning lean chats on gives a Claude chat its Tools control, starting on Auto", async () => {
+      await toggle("Lean Claude chats");
+      await waitUntil(() => saved.length === 1, "the save");
+      assert.deepEqual(saved[0], { leanChats: true });
+      await waitFor(`Boolean(${toolsSelect})`, "the Tools control");
+      assert.deepEqual(await evaluate(`Array.from(${toolsSelect}.options).map(o => [o.value, o.textContent])`), [
+        ["auto", "Auto"],
+        ["lean", "Lean"],
+        ["full", "Full"]
+      ]);
+      assert.equal(await evaluate(`${toolsSelect}.value`), "auto");
+    });
+
+    await check("picking Full in the Tools control changes that chat", async () => {
+      await evaluate(`(() => { const s = ${toolsSelect}; s.value = "full"; s.dispatchEvent(new Event("change", { bubbles: true })); })()`);
+      await waitUntil(() => patched.length === 1, "the chat update");
+      assert.deepEqual(patched[0], { tools: "full" });
     });
 
     await check("turning the filter on saves it and shows the chat's Filter control", async () => {
       await toggle("Plain-English filter");
-      await waitUntil(() => saved.length === 1, "the save");
-      assert.deepEqual(saved[0], { replyFilter: true });
+      await waitUntil(() => saved.length === 2, "the save");
+      assert.deepEqual(saved[1], { replyFilter: true });
       await waitFor(hasFilterControl, "the Filter control");
     });
 
@@ -116,7 +144,7 @@ app.whenReady().then(async () => {
       await toggle("Work on a dev branch");
       await waitUntil(() => calls.ensureDev > before, "the dev branch pass");
       assert.deepEqual(saved.at(-1), { devBranch: true });
-      assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.setting-row input')).map(i => i.checked)"), [true, true, true]);
+      assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.setting-row input')).map(i => i.checked)"), [true, true, true, true]);
       if (process.env.CPH_TEST_SCREENSHOT) {
         writeFileSync(process.env.CPH_TEST_SCREENSHOT, (await window.webContents.capturePage()).toPNG());
       }

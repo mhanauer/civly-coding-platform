@@ -62,6 +62,8 @@ interface StreamLine {
   state?: string;
   // background_tasks_changed: every background task still running
   tasks?: Array<{ task_type?: string }>;
+  // init: the MCP servers this run has and whether each connected
+  mcp_servers?: Array<{ name?: string; status?: string }>;
   permission_denials?: Array<{ tool_name?: string; tool_use_id?: string; tool_input?: Record<string, unknown> }>;
   // on a result: tokens per model, background helpers' included, and their
   // price at API list rates
@@ -164,6 +166,9 @@ export function claudeAdapter(): EngineAdapter {
       // Chrome signed in to this account's claude.ai login.
       if (opts.browser) args.push("--mcp-config", JSON.stringify({ mcpServers: { browser: opts.browser } }));
       args.push("--no-chrome");
+      // a lean chat keeps only the servers given here, and no skills or
+      // slash commands; their lists ride along with every step otherwise
+      if (opts.lean) args.push("--strict-mcp-config", "--disable-slash-commands");
       return args;
     },
 
@@ -264,7 +269,8 @@ export function claudeAdapter(): EngineAdapter {
 
       if (obj.type === "system") {
         if (obj.subtype === "init" && obj.session_id) {
-          emit({ kind: "session", engineSessionId: obj.session_id });
+          const servers = (obj.mcp_servers ?? []).filter((s) => s.status === "connected" && s.name).map((s) => s.name as string);
+          emit({ kind: "session", engineSessionId: obj.session_id, ...(obj.mcp_servers ? { servers } : {}) });
         }
         if (obj.subtype === "background_tasks_changed" && Array.isArray(obj.tasks)) {
           const running = obj.tasks.filter((t) => t.task_type !== "local_bash").length;

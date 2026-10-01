@@ -93,9 +93,19 @@ files opened (the Read tool and shell read commands like `cat` and
 `sed -n`).
 
 **Go or no-go.** Run-to-run noise is how far the wrong-answer rate moved
-between repeats of the same setup. The map passes only when it cuts the
-wrong-answer rate by more than that noise. Whether the extra time and tokens
-are worth it is a person's call; the report gives both changes.
+between repeats of the same setup. A change is a go when accuracy holds
+(wrong answers do not rise by more than that noise) and it costs less. Cost
+is Claude's own estimate at API list prices, where a cached token counts a
+tenth of a fresh one, so it tracks plan use better than raw tokens; tokens
+stand in for engines that report no cost.
+
+## Other setups
+
+`--compare lean` runs the same questions on Claude as the app starts it
+against Claude with only the app's browser connected and no skills or slash
+commands (`--assistants` defaults to claude). That test is why the app has
+lean Claude chats: about 31% cheaper per answer with the same accuracy, on
+this repo and a large private codebase.
 
 ## Known gaps
 

@@ -43,6 +43,7 @@ npm run test:side
 npm run test:auto-effort
 npm run test:data-dir
 npm run test:code-map        # the code-map test's tools (scripts/code-map)
+npm run test:lean-chats
 npm run test:chat            # UI tests: the real window with fixture data
 npm run test:questions
 npm run test:projects

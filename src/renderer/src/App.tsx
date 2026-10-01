@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent as ReactDragEvent, JSX } from "react";
 import type { EngineEvent, PlanConfig } from "../../main/engines/types.ts";
+import type { Tools } from "../../main/leanChats.ts";
 import type { BrowserCheck } from "../../main/browserChecks.ts";
 import type { Settings } from "../../main/settings.ts";
 import markUrl from "../assets/civly-mark.png";
@@ -184,6 +185,8 @@ interface SessionSummary {
   effort: string;
   fullAccess: boolean;
   filter: boolean;
+  tools: Tools;
+  autoFull: boolean;
   running: boolean;
   title: string;
   // true until the first message: plan and folder can still change freely
@@ -1092,6 +1095,9 @@ function Composer({
   onFullAccessChange,
   filter,
   onFilterChange,
+  tools,
+  autoFull,
+  onToolsChange,
   attachments,
   onRemoveAttachment,
   input,
@@ -1120,6 +1126,10 @@ function Composer({
   onFullAccessChange: (b: boolean) => void;
   filter?: boolean;
   onFilterChange?: (b: boolean) => void;
+  // lean chats: given for Claude chats when the setting is on
+  tools?: Tools;
+  autoFull?: boolean;
+  onToolsChange?: (t: Tools) => void;
   attachments: string[];
   onRemoveAttachment: (path: string) => void;
   input: string;
@@ -1298,6 +1308,21 @@ function Composer({
             <option value="full">Full access</option>
           </select>
         </div>
+        {onToolsChange ? (
+          <div className="ctl-group">
+            <span className="ctl-label">Tools</span>
+            <select
+              value={tools ?? "auto"}
+              disabled={disabled}
+              title="Your connectors, skills and slash commands. Lean leaves them out to save plan use; Auto turns them on when a message needs them."
+              onChange={(e) => onToolsChange(e.target.value as Tools)}
+            >
+              <option value="auto">{autoFull ? "Auto (full now)" : "Auto"}</option>
+              <option value="lean">Lean</option>
+              <option value="full">Full</option>
+            </select>
+          </div>
+        ) : null}
         {onFilterChange ? (
           <div className="ctl-group">
             <span className="ctl-label">Filter</span>
@@ -1341,7 +1366,7 @@ const PROJECT_DRAG = "application/x-cph-project";
 type SessionPatch = Parameters<typeof window.hub.updateSession>[1];
 
 // what a side conversation starts on, before it exists
-type SidePicks = Pick<SessionSummary, "planId" | "model" | "effort" | "fullAccess" | "filter">;
+type SidePicks = Pick<SessionSummary, "planId" | "model" | "effort" | "fullAccess" | "filter"> & { tools?: Tools };
 
 // What a chat view sends from and where its errors show: the main chat's
 // box and banner, or the side pane's own.
@@ -1386,7 +1411,8 @@ function ChatView({
   onPatch,
   onQueueSendNow,
   onQueueRemove,
-  showFilter
+  showFilter,
+  showTools
 }: {
   session: SessionSummary;
   status: ChatStatus;
@@ -1421,6 +1447,8 @@ function ChatView({
   onQueueSendNow: (index: number) => void;
   onQueueRemove: (index: number) => void;
   showFilter: boolean;
+  // lean chats are on: Claude chats get the Tools picker
+  showTools: boolean;
 }): JSX.Element {
   // The chat follows new text only while you are at the bottom. Scroll up
   // to read and it stays put; "Jump to latest" brings you back down.
@@ -1747,6 +1775,9 @@ function ChatView({
           onFullAccessChange={(b) => onPatch({ fullAccess: b })}
           filter={session.filter}
           onFilterChange={showFilter ? (b) => onPatch({ filter: b }) : undefined}
+          tools={session.tools}
+          autoFull={session.autoFull}
+          onToolsChange={showTools && session.planEngine === "claude" ? (t) => onPatch({ tools: t }) : undefined}
           attachments={attachments}
           onRemoveAttachment={onRemoveAttachment}
           input={input}
@@ -1888,7 +1919,7 @@ export default function App() {
   const dropOnSideRef = useRef<(paths: string[]) => void>(() => undefined);
   const [usageOpen, setUsageOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settings, setSettings] = useState<Settings>({ replyFilter: false, devBranch: false, zcodeProjects: false });
+  const [settings, setSettings] = useState<Settings>({ replyFilter: false, devBranch: false, zcodeProjects: false, leanChats: false });
   // a newer build is installed; waiting = restart once no chat is working
   const [update, setUpdate] = useState<{ ready: boolean; waiting: boolean }>({ ready: false, waiting: false });
   const [usage, setUsage] = useState<Record<string, PlanUsage>>({});
@@ -2740,6 +2771,8 @@ export default function App() {
     effort: sidePicked.effort,
     fullAccess: sidePicked.fullAccess,
     filter: sidePicked.filter,
+    tools: sidePicked.tools ?? "auto",
+    autoFull: false,
     running: false,
     title: "",
     empty: true,
@@ -2778,6 +2811,7 @@ export default function App() {
         effort: sidePicked.effort,
         fullAccess: sidePicked.fullAccess,
         filter: sidePicked.filter,
+        tools: sidePicked.tools,
         side: true,
         parentId: key
       });
@@ -2854,6 +2888,7 @@ export default function App() {
       }
       onQueueRemove={(index) => void window.hub.queueRemove(box.id, index).then(() => refreshSessions())}
       showFilter={settings.replyFilter}
+      showTools={settings.leanChats}
       {...extra}
     />
   );
@@ -3020,6 +3055,19 @@ export default function App() {
               <span>
                 <strong>Show ZCode's projects</strong>
                 Lists ZCode's recent projects in the sidebar along with the ones added here.
+              </span>
+            </label>
+            <label className="setting-row">
+              <input
+                type="checkbox"
+                checked={settings.leanChats}
+                onChange={(e) => void changeSetting({ leanChats: e.target.checked })}
+              />
+              <span>
+                <strong>Lean Claude chats</strong>
+                Claude chats start without your connectors, skills and slash commands, which cut plan use by about 30%
+                in testing. On Auto, a chat turns them on when a message needs them. Each chat can also pick Lean or
+                Full.
               </span>
             </label>
           </div>

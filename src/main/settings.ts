@@ -12,10 +12,13 @@ export interface Settings {
   devBranch: boolean;
   // ZCode's recent projects show in the sidebar next to the ones added here
   zcodeProjects: boolean;
+  // Claude chats start without connectors, skills and slash commands, and
+  // take them on when a message needs them (leanChats.ts)
+  leanChats: boolean;
 }
 
 const FILE = join(DATA_DIR, "settings.json");
-const DEFAULTS: Settings = { replyFilter: false, devBranch: false, zcodeProjects: false };
+const DEFAULTS: Settings = { replyFilter: false, devBranch: false, zcodeProjects: false, leanChats: false };
 const KEYS = Object.keys(DEFAULTS) as Array<keyof Settings>;
 
 export function loadSettings(): Settings {

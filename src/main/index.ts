@@ -24,6 +24,7 @@ import { filterText } from "./filter.ts";
 import { loadSettings, saveSettings, type Settings } from "./settings.ts";
 import { newestWithin, recapLines, sideContext } from "./recap.ts";
 import { AUTO, resolveEffort } from "./autoEffort.ts";
+import { CARRY_ON, fullToolsReason, leanNote, markerFilter, runsLean, switchedNote, TOOLS, type Tools } from "./leanChats.ts";
 import { allUsage, onUsageChange, recordLimitError, recordUsage, refreshCodex, refreshPlanUsage } from "./usage.ts";
 import type { EngineEvent, PlanConfig, RunHandle } from "./engines/types.ts";
 
@@ -40,6 +41,12 @@ interface Session {
   effort: string;
   fullAccess: boolean;
   filter: boolean;
+  // Claude's connectors, skills and slash commands, when lean chats are on
+  // (leanChats.ts). autoFull: an auto chat has taken them on for good.
+  // leanNoted: the engine has been told how to ask for them.
+  tools: Tools;
+  autoFull?: boolean;
+  leanNoted?: boolean;
   resumeId?: string;
   running: boolean;
   transcript: EngineEvent[];
@@ -85,6 +92,8 @@ interface SessionSummary {
   effort: string;
   fullAccess: boolean;
   filter: boolean;
+  tools: Tools;
+  autoFull: boolean;
   running: boolean;
   title: string;
   // true until the first message: plan and folder can still change freely
@@ -130,6 +139,8 @@ function summary(s: Session): SessionSummary {
     effort: s.effort,
     fullAccess: s.fullAccess,
     filter: s.filter,
+    tools: s.tools,
+    autoFull: Boolean(s.autoFull),
     running: s.running,
     title: s.title,
     // a chat with no messages yet can still switch plan and folder freely
@@ -160,6 +171,9 @@ interface PersistedChat {
   effort: string;
   fullAccess: boolean;
   filter: boolean;
+  tools?: Tools;
+  autoFull?: boolean;
+  leanNoted?: boolean;
   resumeId?: string;
   handoff?: boolean;
   switchedFrom?: string;
@@ -217,6 +231,9 @@ function persistChat(session: Session): void {
       effort: session.effort,
       fullAccess: session.fullAccess,
       filter: session.filter,
+      tools: session.tools,
+      autoFull: session.autoFull,
+      leanNoted: session.leanNoted,
       resumeId: session.resumeId,
       handoff: session.handoff,
       switchedFrom: session.switchedFrom,
@@ -283,6 +300,10 @@ function loadChats(): void {
           effort: record.effort || "",
           fullAccess: Boolean(record.fullAccess),
           filter: record.filter !== false,
+          // chats from before lean chats start on auto
+          tools: TOOLS.includes(record.tools as Tools) ? (record.tools as Tools) : "auto",
+          autoFull: Boolean(record.autoFull),
+          leanNoted: Boolean(record.leanNoted),
           resumeId: record.resumeId,
           handoff: Boolean(record.handoff),
           switchedFrom: record.switchedFrom,
@@ -724,7 +745,7 @@ ipcMain.handle("plans:delete", async (_e, planId: string) => {
   return { plans: removePlan(planId) };
 });
 
-ipcMain.handle("session:create", (_e, opts: { planId: string; cwd: string; model: string; effort: string; fullAccess: boolean; filter?: boolean; side?: boolean; parentId?: string }) => {
+ipcMain.handle("session:create", (_e, opts: { planId: string; cwd: string; model: string; effort: string; fullAccess: boolean; filter?: boolean; tools?: Tools; side?: boolean; parentId?: string }) => {
   const plan = loadPlans().find((p) => p.id === opts.planId);
   if (!plan) return { error: `Unknown plan: ${opts.planId}` };
   const session: Session = {
@@ -735,6 +756,7 @@ ipcMain.handle("session:create", (_e, opts: { planId: string; cwd: string; model
     effort: opts.effort || "",
     fullAccess: opts.fullAccess !== false,
     filter: opts.filter !== false,
+    tools: opts.tools && TOOLS.includes(opts.tools) ? opts.tools : "auto",
     running: false,
     transcript: [],
     title: "",
@@ -778,6 +800,7 @@ ipcMain.handle(
       effort?: string;
       fullAccess?: boolean;
       filter?: boolean;
+      tools?: Tools;
       planId?: string;
     }
   ) => {
@@ -803,6 +826,13 @@ ipcMain.handle(
     if (patch.effort !== undefined) session.effort = patch.effort;
     if (patch.fullAccess !== undefined) session.fullAccess = patch.fullAccess;
     if (patch.filter !== undefined) session.filter = patch.filter;
+    if (patch.tools !== undefined && TOOLS.includes(patch.tools) && patch.tools !== session.tools) {
+      session.tools = patch.tools;
+      // picking auto again starts it lean again, and it has to be told how
+      // to ask for more
+      session.autoFull = false;
+      session.leanNoted = false;
+    }
     persistChat(session);
     return { summary: summary(session) };
   }
@@ -1063,6 +1093,37 @@ ipcMain.handle("session:transcript", (_e, sessionId: string) => {
   return session ? session.transcript : [];
 });
 
+// The connectors each plan's Claude had at its last full start, so a lean
+// chat can name them to Claude and spot a message that names one. The app's
+// own browser is in every chat, lean or not.
+const CONNECTORS_FILE = join(DATA_DIR, "connectors.json");
+
+function readConnectors(): Record<string, unknown> {
+  try {
+    return JSON.parse(readFileSync(CONNECTORS_FILE, "utf8")) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+function knownConnectors(planId: string): string[] {
+  const list = readConnectors()[planId];
+  return Array.isArray(list) ? list.filter((s): s is string => typeof s === "string") : [];
+}
+
+function rememberConnectors(planId: string, servers: string[]): void {
+  const list = servers.filter((s) => s !== "browser");
+  const all = readConnectors();
+  if (JSON.stringify(all[planId]) === JSON.stringify(list)) return;
+  all[planId] = list;
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    writeFileSync(CONNECTORS_FILE, JSON.stringify(all, null, 2));
+  } catch {
+    // only a lean chat's hints suffer
+  }
+}
+
 // Starts one turn. The transcript shows `prompt`; the engine receives
 // `enginePrompt` when given, so steer can add context the user never typed.
 function startTurn(
@@ -1091,6 +1152,29 @@ function startTurn(
   }
   const beside = besideContext(session);
   if (beside) toEngine = `${beside}\n\n---\n\nMy message:\n${toEngine}`;
+  // Lean chats: a message that plainly needs the connectors, skills or slash
+  // commands gets them before it goes out. Otherwise an auto chat is told
+  // how to ask for them, and asks with its reply (watch).
+  const connectors = knownConnectors(session.plan.id);
+  let lean = runsLean({
+    enabled: loadSettings().leanChats,
+    engine: session.plan.engine,
+    tools: session.tools,
+    autoFull: Boolean(session.autoFull)
+  });
+  const plainly = lean && session.tools === "auto" && options.recordUser !== false ? fullToolsReason(prompt, connectors) : undefined;
+  if (plainly) {
+    // the conversation so far says they are off
+    if (session.leanNoted) toEngine = `[Note from the app: my connectors, skills and slash commands are on now.]\n\n${toEngine}`;
+    session.autoFull = true;
+    session.leanNoted = false;
+    lean = false;
+  }
+  const watch = lean && session.tools === "auto" ? markerFilter() : undefined;
+  if (watch && !session.leanNoted) {
+    toEngine = `${leanNote(connectors)}\n\n${toEngine}`;
+    session.leanNoted = true;
+  }
   session.running = true;
   // Auto picks per message, from what you typed rather than the notes above
   const picked = session.effort || (EFFORT_LEVELS[session.plan.engine] ? AUTO : "");
@@ -1098,6 +1182,7 @@ function startTurn(
   if (options.recordUser !== false) {
     pushEvent(session, { kind: "user", text: prompt, ...(picked === AUTO ? { effort } : {}) });
   }
+  if (plainly) pushEvent(session, { kind: "status", text: switchedNote(`the message asks for ${plainly}`) });
   const turnStart = session.transcript.length;
   // an added account picks up anything new in the main CLI home
   linkShared(session.plan);
@@ -1115,9 +1200,13 @@ function startTurn(
       // always explicit, so the effort shown in the chat is the one used
       effort: effort || undefined,
       fullAccess: session.fullAccess,
-      browser
+      browser,
+      lean
     },
-    (event) => pushEvent(session, event)
+    (event) => {
+      if (!lean && event.kind === "session" && event.servers) rememberConnectors(session.plan.id, event.servers);
+      for (const e of watch ? watch.feed(event) : [event]) pushEvent(session, e);
+    }
   );
 
   session.handle.done.then(async () => {
@@ -1125,6 +1214,19 @@ function startTurn(
     // a steered or edited turn was cut off on purpose: no filter, no
     // notification, and the new turn is already on its way
     if (session.steering) return;
+    // Claude asked for the connectors, skills and slash commands: the chat
+    // keeps them from now on and carries on with the same message, unless
+    // you stopped it
+    if (watch?.asked()) {
+      session.autoFull = true;
+      session.leanNoted = false;
+      persistChat(session);
+      const stopped = session.transcript.slice(turnStart).some((e) => e.kind === "status" && e.text === STOPPED);
+      if (!stopped) {
+        startTurn(session, prompt, CARRY_ON, { recordUser: false });
+        return;
+      }
+    }
     const turnEnd = session.transcript.length;
     const status = chatStatus(session);
     void refreshAfterTurn(session);

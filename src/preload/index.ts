@@ -3,6 +3,7 @@ import type { EngineEvent, PlanConfig, UsageWindow } from "../main/engines/types
 import type { BrowserCheck } from "../main/browserChecks.ts";
 import type { CodexCredits, CodexResets } from "../main/codexAccountUsage.ts";
 import type { Settings } from "../main/settings.ts";
+import type { Tools } from "../main/leanChats.ts";
 
 export interface PlanUsage {
   windows: UsageWindow[];
@@ -28,6 +29,9 @@ export interface SessionSummary {
   effort: string;
   fullAccess: boolean;
   filter: boolean;
+  // lean chats: what Claude starts with; autoFull once auto took on more
+  tools: Tools;
+  autoFull: boolean;
   running: boolean;
   title: string;
   // true until the first message: plan and folder can still change freely
@@ -48,6 +52,7 @@ export interface SessionPatch {
   effort?: string;
   fullAccess?: boolean;
   filter?: boolean;
+  tools?: Tools;
   planId?: string;
 }
 
@@ -77,6 +82,7 @@ const api = {
     effort: string;
     fullAccess: boolean;
     filter?: boolean;
+    tools?: Tools;
     side?: boolean;
     parentId?: string;
   }): Promise<{ sessionId?: string; error?: string }> =>
