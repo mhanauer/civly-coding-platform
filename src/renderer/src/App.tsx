@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent as ReactDragEvent, JSX } from "react";
 import type { EngineEvent, PlanConfig } from "../../main/engines/types.ts";
 import type { BrowserCheck } from "../../main/browserChecks.ts";
@@ -1427,6 +1427,25 @@ function ChatView({
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const stickRef = useRef(true);
   const [awayFromBottom, setAwayFromBottom] = useState(false);
+  // Only your own scrolling (wheel, keys, a held pointer) lets go of the
+  // bottom. The browser also moves the scroll position when the oldest
+  // row drops off a long chat, and that must not count as scrolling up.
+  const userScrollAtRef = useRef(0);
+  const pointerHeldRef = useRef(false);
+  useEffect(() => {
+    const release = (): void => {
+      pointerHeldRef.current = false;
+    };
+    window.addEventListener("pointerup", release);
+    window.addEventListener("pointercancel", release);
+    return () => {
+      window.removeEventListener("pointerup", release);
+      window.removeEventListener("pointercancel", release);
+    };
+  }, []);
+  const markUserScroll = (): void => {
+    userScrollAtRef.current = Date.now();
+  };
   // long chats render their latest rows; older ones load on request
   const [shownItems, setShownItems] = useState(ROWS_PAGE);
 
@@ -1450,12 +1469,23 @@ function ChatView({
   }, [session.id]);
 
   // new text in this chat (not other chats) keeps you at the bottom, but
-  // only if you were already there
-  useEffect(() => {
+  // only if you were already there; before paint, so no frame lands short
+  useLayoutEffect(() => {
     if (!stickRef.current) return;
     const el = transcriptRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [events]);
+  }, [events, busy]);
+
+  // the box shrinking or the queue list appearing keeps the bottom in view
+  useEffect(() => {
+    const el = transcriptRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => {
+      if (stickRef.current) el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   // only this chat's own events redo the grouping, not every redraw
   const merged = useMemo(() => mergeDeltas(events), [events]);
@@ -1499,11 +1529,19 @@ function ChatView({
       <div
         className="transcript"
         ref={transcriptRef}
+        onWheel={markUserScroll}
+        onKeyDown={markUserScroll}
+        onPointerDown={() => {
+          pointerHeldRef.current = true;
+        }}
         onScroll={(e) => {
           const el = e.currentTarget;
           const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-          stickRef.current = atBottom;
-          if (atBottom === awayFromBottom) setAwayFromBottom(!atBottom);
+          if (atBottom) stickRef.current = true;
+          else if (pointerHeldRef.current || Date.now() - userScrollAtRef.current < 500) stickRef.current = false;
+          // the chat moved under you while you were at the bottom
+          else if (stickRef.current) el.scrollTop = el.scrollHeight;
+          if (stickRef.current === awayFromBottom) setAwayFromBottom(!stickRef.current);
         }}
       >
         {events.length === 0 && !busy ? (

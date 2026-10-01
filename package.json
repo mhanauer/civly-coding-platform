@@ -16,6 +16,7 @@
     "test:auto-effort": "node --experimental-strip-types --test scripts/auto-effort.test.ts",
     "test:data-dir": "node --experimental-strip-types --test scripts/data-dir.test.ts",
     "test:chat": "electron scripts/chat-submit-ui-smoke.mjs",
+    "test:scroll": "electron scripts/chat-scroll-ui-smoke.mjs",
     "test:questions": "electron scripts/question-card-ui-smoke.mjs",
     "test:projects": "electron scripts/project-order-ui-smoke.mjs",
     "test:accounts-ui": "electron scripts/accounts-ui-smoke.mjs",
