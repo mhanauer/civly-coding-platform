@@ -101,5 +101,5 @@ export function denyMessage(cwd: string, tool: string, input: Record<string, unk
   }
   const rules = hits.map((h) => `${h.rule} in ${h.file}`).join(", and ");
   const where = new Set(hits.map((h) => h.file)).size > 1 ? "those files" : "that file";
-  return `Blocked by the deny rule${hits.length > 1 ? "s" : ""} ${rules}: ${what}. Full access does not override a deny rule. Move it to "ask" in ${where} to approve these from the chat, or remove it, then send again.`;
+  return `Blocked by the deny rule${hits.length > 1 ? "s" : ""} ${rules}: ${what}. Full access does not override a deny rule. Usually the fix is to ask Claude to do that step without this command. If you do want it allowed, move the rule to "ask" in ${where} to approve these from the chat, or remove it, then send again.`;
 }
