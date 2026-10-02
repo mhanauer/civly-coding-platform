@@ -130,8 +130,12 @@ console.log(`Scanned ${fresh.length} new commit${fresh.length === 1 ? "" : "s"}:
 // 5: build before the test:* scripts, since the UI tests load out/
 const scripts = Object.keys(JSON.parse(readFileSync(resolve(root, "package.json"), "utf8")).scripts ?? {});
 const steps = ["typecheck", "build", ...scripts.filter((s) => s.startsWith("test:"))];
+// git hands the hook GIT_DIR and the like. Pushed from a second worktree it
+// is a full path, and a test's own scratch repo would then act on this one.
+const env = { ...process.env };
+for (const name of lines(git("rev-parse", "--local-env-vars"))) delete env[name];
 for (const step of steps) {
-  const r = spawnSync("npm", ["run", "-s", step], { cwd: root, encoding: "utf8", maxBuffer: 1 << 28 });
+  const r = spawnSync("npm", ["run", "-s", step], { cwd: root, env, encoding: "utf8", maxBuffer: 1 << 28 });
   if (r.status !== 0) {
     process.stderr.write(`${r.stdout ?? ""}${r.stderr ?? ""}`);
     stop(`npm run ${step} failed.`);
