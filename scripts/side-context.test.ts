@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { SIDE_CONTEXT_LIMIT, newestWithin, recapLines, sideContext } from "../src/main/recap.ts";
+import { HANDOFF_LIMIT, SIDE_CONTEXT_LIMIT, handoffContext, newestWithin, recapLines, sideContext } from "../src/main/recap.ts";
 import type { SideParent } from "../src/main/recap.ts";
 import type { EngineEvent } from "../src/main/engines/types.ts";
 
@@ -61,20 +61,13 @@ test("a reply cut off mid-stream keeps what was shown", () => {
   assert.deepEqual(lines, ["Me: Go", "Assistant: Half a repl", "Me: Continue"]);
 });
 
-test("the handoff recap leaves tool calls out", () => {
-  assert.deepEqual(recapLines(resize), [
-    "Me: Ok let's resize then",
-    "Assistant: I'll request a reduction to 1,370 GiB, saving about USD 15 per month."
-  ]);
-});
-
 test("only the latest turn's last steps are retold", () => {
   const step = (n: number): EngineEvent => ({ kind: "tool", name: "Bash", step: { type: "terminal", label: "Terminal", target: `cmd ${n}` } });
   const events: EngineEvent[] = [
     { kind: "user", text: "First" }, step(0), { kind: "error", text: "old failure" }, { kind: "text", text: "Done first" },
     { kind: "user", text: "Second" }, ...Array.from({ length: 25 }, (_, n) => step(n + 1)), { kind: "error", text: "timed out" }
   ];
-  const lines = recapLines(events, true);
+  const lines = recapLines(events);
   assert.ok(!lines.some((l) => /cmd 0$|old failure|cmd [1-6]$/.test(l)));
   assert.ok(lines.includes("(tool) Terminal: cmd 7"));
   assert.ok(lines.includes("(tool) Terminal: cmd 25"));
@@ -100,4 +93,52 @@ test("one message longer than the limit still shows its start", () => {
 
 test("a chat with nothing in it yet adds nothing", () => {
   assert.equal(sideContext(parent([]), undefined), "");
+});
+
+const FILE = "/data/chats/moved.json";
+
+test("a chat moved to another engine carries the latest turn's steps", () => {
+  const cutOff: EngineEvent[] = [
+    { kind: "user", text: "Rename plans.json to accounts.json everywhere" },
+    { kind: "tool", name: "Edit", step: { type: "edit", label: "Edited", target: "src/main/store.ts" } },
+    { kind: "tool", name: "Edit", step: { type: "edit", label: "Edited", target: "src/main/index.ts" } },
+    { kind: "error", text: "You've hit your usage limit" },
+    { kind: "done", ok: false }
+  ];
+  const out = handoffContext(cutOff, FILE);
+  assert.match(out, /^We are continuing a conversation that started with another assistant\./);
+  assert.match(out, /full record, including tool output, is at \/data\/chats\/moved\.json/);
+  assert.match(out, /Me: Rename plans\.json to accounts\.json everywhere\n\n\(tool\) Edited: src\/main\/store\.ts\n\n\(tool\) Edited: src\/main\/index\.ts/);
+  assert.match(out, /\(error\) You've hit your usage limit$/);
+});
+
+test("a long moved chat keeps its first message and its newest part", () => {
+  const long: EngineEvent[] = [
+    { kind: "user", text: "Old wording", replaced: true },
+    { kind: "user", text: "Never touch the prod config" }
+  ];
+  for (let i = 0; i < 2000; i++) long.push({ kind: "text", text: `reply ${i} ${"x".repeat(80)}` });
+  const out = handoffContext(long, FILE);
+  assert.ok(out.length < HANDOFF_LIMIT + 500);
+  assert.match(out, /Only my first message and the most recent part are below; the rest is in its full record at \/data\/chats\/moved\.json/);
+  assert.match(out, /Me: Never touch the prod config\n\n\(older messages left out\)\n\nAssistant: reply \d+ /);
+  assert.match(out, /reply 1999 /);
+  assert.doesNotMatch(out, /reply 0 |Old wording/);
+});
+
+test("a huge first message keeps its start", () => {
+  const out = handoffContext([
+    { kind: "user", text: "y".repeat(50000) },
+    ...Array.from({ length: 300 }, (_, i): EngineEvent => ({ kind: "text", text: `reply ${i} ${"x".repeat(80)}` }))
+  ], FILE);
+  assert.ok(out.length < HANDOFF_LIMIT + 500);
+  assert.match(out, /Me: y+…\n\n\(older messages left out\)/);
+  assert.match(out, /reply 299 /);
+});
+
+test("a chat that fits is passed whole", () => {
+  const out = handoffContext(resize, FILE);
+  assert.doesNotMatch(out, /left out|Only my first message/);
+  assert.match(out, /Me: Ok let's resize then/);
+  assert.equal(handoffContext([], FILE), "");
 });

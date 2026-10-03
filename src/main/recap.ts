@@ -21,10 +21,10 @@ function oneLine(text: string, max: number): string {
 // the latest turn's recent tool calls and errors with steps. A reply still
 // streaming (or cut off mid-stream) exists only as deltas, so those count as
 // its text.
-export function recapLines(events: readonly EngineEvent[], steps = false): string[] {
+export function recapLines(events: readonly EngineEvent[]): string[] {
   const lastUser = events.map((e) => e.kind).lastIndexOf("user");
   const stepAt = events.flatMap((e, i) => (i > lastUser && (e.kind === "tool" || e.kind === "error") ? [i] : []));
-  const shown = new Set(steps ? stepAt.slice(-RECENT_STEPS) : []);
+  const shown = new Set(stepAt.slice(-RECENT_STEPS));
   const lines: string[] = [];
   let partial = "";
   const flush = (label: string): void => {
@@ -66,6 +66,37 @@ export function newestWithin(lines: readonly string[], limit: number): { text: s
   return { text: out.trim(), cut: false };
 }
 
+function clip(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+// What a chat's next message carries when it moves to an engine that cannot
+// resume its conversation. The latest turn's recent steps go along: a turn
+// cut off by a usage limit is half done, and the new engine must not redo or
+// undo that work. A long chat keeps its newest part plus its first message,
+// which usually holds the request the rest of the chat works on.
+export const HANDOFF_LIMIT = 24000;
+// a first message longer than this keeps its start
+const FIRST_LIMIT = 6000;
+const LEFT_OUT = "(older messages left out)";
+
+export function handoffContext(transcript: readonly EngineEvent[], file: string): string {
+  const lines = recapLines(transcript);
+  const newest = newestWithin(lines, HANDOFF_LIMIT);
+  if (!newest.text) return "";
+  let text = newest.text;
+  const firstAt = lines.findIndex((line) => line.startsWith("Me: "));
+  if (newest.cut && firstAt >= 0) {
+    const first = clip(lines[firstAt], FIRST_LIMIT);
+    const rest = newestWithin(lines.slice(firstAt + 1), HANDOFF_LIMIT - first.length - LEFT_OUT.length);
+    text = [first, rest.cut ? LEFT_OUT : "", rest.text].filter(Boolean).join("\n\n");
+  }
+  const record = newest.cut
+    ? `Only my first message and the most recent part are below; the rest is in its full record at ${file}.`
+    : `Its full record, including tool output, is at ${file}.`;
+  return `We are continuing a conversation that started with another assistant. Here it is so far, with the latest turn's last steps. ${record}\n\n${text}`;
+}
+
 // The chat a side conversation sits beside, as the side conversation's
 // engine is told about it.
 export interface SideParent {
@@ -86,7 +117,7 @@ export const SIDE_CONTEXT_LIMIT = 40000;
 // happened there since. Empty when there is nothing to tell.
 export function sideContext(parent: SideParent, seen: number | undefined): string {
   const fresh = seen === undefined || seen > parent.transcript.length;
-  const lines = recapLines(parent.transcript.slice(fresh ? 0 : seen), true);
+  const lines = recapLines(parent.transcript.slice(fresh ? 0 : seen));
   const { text, cut } = newestWithin(lines, SIDE_CONTEXT_LIMIT);
   if (!text) return "";
   const name = parent.title ? ` "${oneLine(parent.title, 80)}"` : "";

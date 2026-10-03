@@ -23,7 +23,7 @@ import { adoptShellEnv } from "./shellPath.ts";
 import { filterText } from "./filter.ts";
 import { loadSettings, saveSettings, type Settings } from "./settings.ts";
 import { checkClis, freshCliStatus, startCliUpdates, updateCli } from "./cliUpdates.ts";
-import { newestWithin, recapLines, sideContext } from "./recap.ts";
+import { handoffContext, sideContext } from "./recap.ts";
 import { AUTO, resolveEffort } from "./autoEffort.ts";
 import { CARRY_ON, fullToolsReason, leanNote, markerFilter, runsLean, switchedNote, TOOLS, type Tools } from "./leanChats.ts";
 import { AUTO_RETRY_PREFIX, hitPlanLimit, isLimitError, latestAttempt, nextPlanAfterLimit } from "./limitFallback.ts";
@@ -473,13 +473,6 @@ function switchPlan(session: Session, next: PlanConfig): void {
     session.resumeId = undefined;
     session.handoff = true;
   }
-}
-
-// The conversation so far as plain text, for an engine that joins mid-chat.
-// Keeps the most recent exchanges when the whole history is too long.
-const RECAP_LIMIT = 24000;
-function recap(session: Session): string {
-  return newestWithin(recapLines(session.transcript), RECAP_LIMIT).text;
 }
 
 // A side conversation's message carries the chat it sits beside: all of it
@@ -1122,11 +1115,11 @@ function startTurn(
     session.switchedFrom = undefined;
   }
   if (session.handoff) {
-    // recap is built before this turn's message joins the transcript
-    const history = recap(session);
-    if (history) {
-      toEngine = `We are continuing a conversation that started with another assistant. Here it is so far:\n\n${history}\n\n---\n\nMy next message:\n${toEngine}`;
-    }
+    // recap is built before this turn's message joins the transcript. The
+    // save makes the full record it points to current.
+    persistChat(session);
+    const history = handoffContext(session.transcript, join(CHATS_DIR, `${session.id}.json`));
+    if (history) toEngine = `${history}\n\n---\n\nMy next message:\n${toEngine}`;
     session.handoff = false;
   }
   const beside = besideContext(session);

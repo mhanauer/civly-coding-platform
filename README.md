@@ -108,7 +108,10 @@ home and relinks it. An older copy is kept beside it as
 
 When a plan hits its hourly or weekly limit, the chat continues the request
 automatically on another signed-in account of the same kind if one has quota.
-Otherwise it uses another available plan and passes along the conversation.
+Otherwise it uses another available plan and passes along the conversation:
+your first message, the most recent part of the chat, the last steps of the
+turn the limit cut off, and where the chat's full record is saved. Switching a
+chat to another kind of plan yourself passes it along the same way.
 If every signed-in plan is out, add an account or send the request again after
 a reset.
 Deleting an added account signs it out and removes its home.
@@ -177,7 +180,7 @@ no effect.
 ```bash
 npm run typecheck          # both TypeScript projects
 npm run test:accounts      # account homes and shared links
-npm run test:side          # side conversations
+npm run test:side          # side conversations and plan hand-offs
 npm run test:limit-fallback # automatic plan continuation at usage limits
 npm run test:auto-effort   # Auto effort
 npm run test:data-dir      # the data folder is private to you
