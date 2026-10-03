@@ -1,7 +1,7 @@
 {
   "name": "civly-coding-platform",
   "productName": "Civly Coding Platform",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Run your AI coding subscriptions side by side through their official CLIs",
   "private": true,
   "license": "MIT",
@@ -13,6 +13,7 @@
     "smoke": "node scripts/smoke.mts",
     "test:side": "node --experimental-strip-types --test scripts/side-context.test.ts",
     "test:accounts": "node --experimental-strip-types --test scripts/accounts.test.ts",
+    "test:limit-fallback": "node --experimental-strip-types --test scripts/limit-fallback.test.ts",
     "test:auto-effort": "node --experimental-strip-types --test scripts/auto-effort.test.ts",
     "test:data-dir": "node --experimental-strip-types --test scripts/data-dir.test.ts",
     "test:code-map": "node --experimental-strip-types --test scripts/code-map.test.ts",

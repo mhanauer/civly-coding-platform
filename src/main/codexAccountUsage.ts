@@ -145,7 +145,7 @@ export function readCodexAccountUsage(bin: string, args: string[], home: string)
     input.write(JSON.stringify({
       method: "initialize",
       id: 1,
-      params: { clientInfo: { name: "civly_coding_platform", title: "Civly Coding Platform", version: "0.1.0" } }
+      params: { clientInfo: { name: "civly_coding_platform", title: "Civly Coding Platform", version: "0.2.0" } }
     }) + "\n");
   });
 }

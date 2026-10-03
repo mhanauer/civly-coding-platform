@@ -26,6 +26,7 @@ import { checkClis, freshCliStatus, startCliUpdates, updateCli } from "./cliUpda
 import { newestWithin, recapLines, sideContext } from "./recap.ts";
 import { AUTO, resolveEffort } from "./autoEffort.ts";
 import { CARRY_ON, fullToolsReason, leanNote, markerFilter, runsLean, switchedNote, TOOLS, type Tools } from "./leanChats.ts";
+import { AUTO_RETRY_PREFIX, hitPlanLimit, isLimitError, latestAttempt, nextPlanAfterLimit } from "./limitFallback.ts";
 import { allUsage, onUsageChange, recordLimitError, recordUsage, refreshCodex, refreshPlanUsage } from "./usage.ts";
 import type { EngineEvent, EngineKind, PlanConfig, RunHandle } from "./engines/types.ts";
 
@@ -120,10 +121,10 @@ function chatStatus(s: Session): ChatStatus {
   const t = s.transcript;
   const lastUser = t.map((e) => e.kind).lastIndexOf("user");
   if (lastUser === -1) return "idle";
-  const turn = t.slice(lastUser + 1);
+  const turn = latestAttempt(t.slice(lastUser + 1));
   if (turn.some((e) => e.kind === "status" && e.text === STOPPED)) return "idle";
   if (turn.some((e) => e.kind === "error" || (e.kind === "done" && !e.ok))) return "error";
-  // a limit fallback moved the chat: the message has to be sent again
+  // Older chats may have moved plans before automatic continuation existed.
   if (turn.some((e) => e.kind === "status" && e.text.startsWith("Plan limit hit"))) return "error";
   return turn.some((e) => e.kind === "done") ? "done" : "idle";
 }
@@ -454,28 +455,6 @@ function ensureDevDefault(path: string): { error: string | null; branches: { cur
   return { error: null, branches: gitBranches(path) };
 }
 
-// A plan that runs dry switches the session to the next signed-in plan so
-// work keeps going. Plans that can resume the conversation come first (another
-// account of the same kind), then the same engine, then the rest; plans that
-// are out themselves go last.
-const LIMIT_PATTERNS =
-  /usage limit|rate[ _-]?limit|quota|429|weekly limit|limit reached|exceeded|hit your limit|ran out/i;
-
-function nextPlanAfterLimit(current: PlanConfig): PlanConfig | null {
-  const usage = allUsage();
-  const store = conversationStore(current);
-  const rank = (p: PlanConfig): number =>
-    (conversationStore(p) === store ? 0 : p.engine === current.engine ? 1 : 2) +
-    (usage[p.id]?.limitedUntil !== undefined ? 3 : 0);
-  const others = loadPlans().filter(
-    (p) =>
-      p.installed &&
-      p.id !== current.id &&
-      (p.loggedIn || Boolean(p.env?.ANTHROPIC_AUTH_TOKEN || p.env?.ANTHROPIC_API_KEY))
-  );
-  return others.sort((a, b) => rank(a) - rank(b))[0] ?? null;
-}
-
 // Moves a chat to another plan. Plans that share a conversation store (every
 // Claude plan: added Claude accounts link the main projects folder) keep the
 // resume id. Anything else cannot read it: drop the id and mark the next turn
@@ -551,12 +530,6 @@ function pushEvent(session: Session, event: EngineEvent): void {
     setTimeout(sendSessions, 0);
   }
   if (event.kind === "permission_decision") session.pending.delete(event.requestId);
-  if (
-    (event.kind === "error" && LIMIT_PATTERNS.test(event.text)) ||
-    (event.kind === "done" && !event.ok && event.summary && LIMIT_PATTERNS.test(event.summary))
-  ) {
-    recordLimitError(session.plan.id, event.kind === "error" ? event.text : event.summary ?? "");
-  }
   session.transcript.push(event);
   session.updatedAt = Date.now();
   if (event.kind === "user" && !session.title) {
@@ -573,18 +546,6 @@ function pushEvent(session: Session, event: EngineEvent): void {
   else persistChat(session);
   mainWindow?.webContents.send("session:event", { sessionId: session.id, event });
 
-  if (event.kind === "error" && LIMIT_PATTERNS.test(event.text)) {
-    const next = nextPlanAfterLimit(session.plan);
-    if (next) {
-      const from = session.plan.label;
-      switchPlan(session, next);
-      persistChat(session);
-      pushEvent(session, {
-        kind: "status",
-        text: `Plan limit hit on ${from}. This session now runs on ${next.label}. Send your message again.`
-      });
-    }
-  }
 }
 
 // Hidden: the dev copy runs with no window or Dock icon while tests drive it.
@@ -1144,8 +1105,12 @@ function startTurn(
   session: Session,
   prompt: string,
   enginePrompt?: string,
-  options: { recordUser?: boolean } = {}
+  options: { recordUser?: boolean; triedPlans?: readonly string[] } = {}
 ): void {
+  const runPlan = session.plan;
+  const triedPlans = new Set(options.triedPlans ?? []);
+  triedPlans.add(runPlan.id);
+  const limitEvents: EngineEvent[] = [];
   let toEngine = enginePrompt ?? prompt;
   // switched away and back before sending: nothing changed for the model
   if (session.switchedFrom === session.plan.label) session.switchedFrom = undefined;
@@ -1205,7 +1170,7 @@ function startTurn(
   if (browser) void ensureBrowser();
 
   session.handle = runEngine(
-    session.plan,
+    runPlan,
     {
       prompt: toEngine,
       resumeId: session.resumeId,
@@ -1218,7 +1183,8 @@ function startTurn(
       lean
     },
     (event) => {
-      if (!lean && event.kind === "session" && event.servers) rememberConnectors(session.plan.id, event.servers);
+      if (event.kind === "usage" || event.kind === "error" || event.kind === "done") limitEvents.push(event);
+      if (!lean && event.kind === "session" && event.servers) rememberConnectors(runPlan.id, event.servers);
       for (const e of watch ? watch.feed(event) : [event]) pushEvent(session, e);
     }
   );
@@ -1228,14 +1194,47 @@ function startTurn(
     // a steered or edited turn was cut off on purpose: no filter, no
     // notification, and the new turn is already on its way
     if (session.steering) return;
+    const stopped = session.transcript.slice(turnStart).some((e) => e.kind === "status" && e.text === STOPPED);
+    const hitLimit = hitPlanLimit(limitEvents);
+    if (hitLimit && !stopped && session.plan.id === runPlan.id && sessions.get(session.id) === session) {
+      const current = runPlan;
+      const limitText = [...limitEvents].reverse().find(
+        (event) => (event.kind === "error" && isLimitError(event.text)) ||
+          (event.kind === "done" && event.summary && isLimitError(event.summary))
+      );
+      if (limitText?.kind === "error") recordLimitError(current.id, limitText.text);
+      else if (limitText?.kind === "done" && limitText.summary) recordLimitError(current.id, limitText.summary);
+      const usage = allUsage();
+      const unavailable = new Set([
+        ...triedPlans,
+        ...Object.entries(usage).filter(([, value]) => value.limitedUntil !== undefined).map(([id]) => id)
+      ]);
+      const next = nextPlanAfterLimit(current, loadPlans(), unavailable, conversationStore);
+      if (next) {
+        switchPlan(session, next);
+        pushEvent(session, {
+          kind: "status",
+          text: `${AUTO_RETRY_PREFIX}${next.label} after ${current.label} hit its limit.`
+        });
+        const continuation = session.resumeId
+          ? "[The previous plan hit its usage limit. Continue and finish my most recent request from where you left off. Check the current state before repeating an action.]"
+          : `[The previous plan hit its usage limit. Continue and finish my request below. Check the current state before repeating an action.]\n\n${prompt}`;
+        startTurn(session, prompt, continuation, { recordUser: false, triedPlans: [...triedPlans, next.id] });
+        sendSessions();
+        return;
+      }
+      pushEvent(session, {
+        kind: "error",
+        text: "No other signed-in plan has quota. Add an account or wait for a reset, then send your message again."
+      });
+    }
     // Claude asked for the connectors, skills and slash commands: the chat
     // keeps them from now on and carries on with the same message, unless
     // you stopped it
-    if (watch?.asked()) {
+    if (watch?.asked() && !hitLimit) {
       session.autoFull = true;
       session.leanNoted = false;
       persistChat(session);
-      const stopped = session.transcript.slice(turnStart).some((e) => e.kind === "status" && e.text === STOPPED);
       if (!stopped) {
         startTurn(session, prompt, CARRY_ON, { recordUser: false });
         return;
@@ -1243,7 +1242,7 @@ function startTurn(
     }
     const turnEnd = session.transcript.length;
     const status = chatStatus(session);
-    void refreshAfterTurn(session);
+    void refreshAfterTurn(runPlan, session.resumeId);
 
     if (session.filter && loadSettings().replyFilter && turnEnd > turnStart) {
       const joined = session.transcript
@@ -1268,10 +1267,9 @@ function startTurn(
     // still lets it go on.
     const next = session.queue[0];
     const turn = session.transcript.slice(turnStart, turnEnd);
-    const stopped = turn.some((e) => e.kind === "status" && e.text === STOPPED);
     const lastDone = [...turn].reverse().find((e) => e.kind === "done");
     const finished = lastDone?.kind === "done" && lastDone.ok;
-    if (next !== undefined && finished && !stopped && !session.running) {
+    if (next !== undefined && finished && !stopped && !hitLimit && !session.running) {
       session.queue.shift();
       persistChat(session);
       startTurn(session, next);
@@ -1407,9 +1405,9 @@ function lastText(session: Session, from: number, to: number): string {
 }
 
 // Refresh the signed-in plan's usage after a turn.
-async function refreshAfterTurn(session: Session): Promise<void> {
-  if (session.plan.engine === "codex") await refreshCodex(session.plan, session.resumeId);
-  else await refreshPlanUsage(session.plan);
+async function refreshAfterTurn(plan: PlanConfig, threadId?: string): Promise<void> {
+  if (plan.engine === "codex") await refreshCodex(plan, threadId);
+  else await refreshPlanUsage(plan);
 }
 
 // The chat list changed in the main process (a queued turn started, a turn

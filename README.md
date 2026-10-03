@@ -15,14 +15,30 @@ CLI headless (`claude -p --output-format stream-json`, `codex exec --json`,
 in its own CLI's credential store. The app never reads login tokens and never
 makes its own API calls against a subscription quota.
 
-## Requirements
+## Install
 
-- macOS on Apple silicon. Sign-ins open in Terminal and login checks read the
-  macOS keychain, so other platforms do not work yet.
-- Node.js 24 and npm.
-- At least one of the CLIs below, installed and on your shell's PATH.
+1. Download `Civly-Coding-Platform-<version>-arm64.dmg` from the
+   [latest release](https://github.com/mhanauer/civly-coding-platform/releases/latest).
+2. Open it and drag **Civly Coding Platform** onto **Applications**.
+3. Install and sign in to at least one of the CLIs below. The app finds them
+   on your shell's PATH.
 
-## Quick start
+It needs macOS on Apple silicon. Sign-ins open in Terminal and login checks
+read the macOS keychain, so other platforms do not work yet.
+
+Each release is signed with a Developer ID and notarized by Apple. To check a
+download against the `.sha256` file published beside it:
+
+```bash
+shasum -a 256 -c Civly-Coding-Platform-<version>-arm64.dmg.sha256
+```
+
+To update, install the newer DMG the same way. The running app notices and
+offers to restart once no chat is working.
+
+## Build from source
+
+You need Node.js 24 and npm.
 
 ```bash
 git clone https://github.com/mhanauer/civly-coding-platform.git
@@ -31,7 +47,7 @@ npm install
 npm run dev          # opens the app window
 ```
 
-To install it as a regular app:
+To install your build as a regular app:
 
 ```bash
 npm run package:app  # builds, signs, and copies it to /Applications
@@ -40,8 +56,7 @@ npm run package:app  # builds, signs, and copies it to /Applications
 The package script creates a self-signed code signing key the first time it
 runs, kept in `~/.coding-plan-hub/signing` in a keychain of its own. Every
 build is signed with that key, so macOS keeps the app's privacy permissions
-(folders, Full Disk Access) across rebuilds. When a newer build is installed,
-the running app offers to restart once no chat is working.
+(folders, Full Disk Access) across rebuilds.
 
 ## Signing in to each plan
 
@@ -91,8 +106,12 @@ whole and replaces its link, the next run puts the newer copy back in the main
 home and relinks it. An older copy is kept beside it as
 `<name>.unlinked-<time>`.
 
-When a plan hits its limit, the chat moves to another signed-in account of the
-same kind. Deleting an added account signs it out and removes its home.
+When a plan hits its hourly or weekly limit, the chat continues the request
+automatically on another signed-in account of the same kind if one has quota.
+Otherwise it uses another available plan and passes along the conversation.
+If every signed-in plan is out, add an account or send the request again after
+a reset.
+Deleting an added account signs it out and removes its home.
 
 ## Usage
 
@@ -127,6 +146,9 @@ Settings. They are saved in `~/.coding-plan-hub/settings.json`.
 - **Work on a dev branch.** Puts every project on a branch named `dev`,
   creating it where missing.
 - **Show ZCode's projects.** Lists ZCode's recent projects in the sidebar.
+- **Lean Claude chats.** Starts Claude without connectors, skills, or slash
+  commands to use less of your plan. On Auto, a chat turns them on when a
+  message needs them. This option is still in testing.
 - **Keep the CLIs up to date.** The CLIs update themselves only when you run
   them in Terminal, and the app runs them headless. With this on, the app
   checks Claude Code, Codex, Gemini and Kimi for new releases at launch and
@@ -156,6 +178,7 @@ no effect.
 npm run typecheck          # both TypeScript projects
 npm run test:accounts      # account homes and shared links
 npm run test:side          # side conversations
+npm run test:limit-fallback # automatic plan continuation at usage limits
 npm run test:auto-effort   # Auto effort
 npm run test:data-dir      # the data folder is private to you
 npm run test:cli-updates   # CLI version checks and updates

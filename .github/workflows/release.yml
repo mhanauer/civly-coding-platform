@@ -1,7 +1,9 @@
 # Builds the downloadable app for a version tag (v0.1.0 and so on): runs the
 # checks, signs with the Developer ID, notarizes, packs a DMG, and attaches it
-# to a GitHub Release. scripts/release.mjs does the build. The secrets it needs
-# live in the "release" environment; CONTRIBUTING.md lists them.
+# to a GitHub Release. scripts/release.mjs does the build. Releases are built
+# on the maintainer's Mac for now, so this job runs only once the repository
+# variable RELEASE_FROM_CI is "true" and the secrets in the "release"
+# environment are set; CONTRIBUTING.md lists them.
 name: Release
 
 on:
@@ -17,6 +19,7 @@ concurrency:
 
 jobs:
   release:
+    if: vars.RELEASE_FROM_CI == 'true'
     runs-on: macos-26
     environment: release
     timeout-minutes: 60

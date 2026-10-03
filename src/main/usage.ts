@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { DATA_DIR } from "./store.ts";
 import type { PlanConfig, UsageWindow } from "./engines/types.ts";
 import { engineHome } from "./accounts.ts";
+import { resetTimeFromText } from "./limitFallback.ts";
 import { resolveBin } from "./engines/index.ts";
 import {
   codexWindowLabel,
@@ -42,18 +43,25 @@ function load(): Record<string, PlanUsage> {
 }
 
 function save(): void {
+  const current = allUsage();
   try {
-    writeFileSync(FILE, JSON.stringify(usage, null, 2));
+    writeFileSync(FILE, JSON.stringify(current, null, 2));
   } catch {
     // usage is a convenience; a failed save never blocks a chat
   }
-  onChange(allUsage());
+  onChange(current);
 }
 
 // Drops limits whose reset time has passed.
 export function allUsage(): Record<string, PlanUsage> {
   const now = Date.now();
   for (const u of Object.values(usage)) {
+    // Older builds could replace a streamed reset time with 0 after the CLI
+    // reported a limit error. Recover it from the saved usage window.
+    if (u.limitedUntil === 0) {
+      const reset = Math.max(...u.windows.map((w) => w.usedPct >= 100 ? w.resetsAt ?? 0 : 0), 0);
+      if (reset) u.limitedUntil = reset;
+    }
     if (u.limitedUntil && u.limitedUntil < now) u.limitedUntil = undefined;
   }
   return usage;
@@ -88,8 +96,11 @@ export function recordLimitError(planId: string, text: string): void {
   if (!until && inMin && (inMin[1] || inMin[2])) {
     until = Date.now() + ((Number(inMin[1] ?? 0) * 60 + Number(inMin[2] ?? 0)) * 60000);
   }
+  if (!until) until = resetTimeFromText(text) ?? 0;
   const prev = usage[planId];
-  usage[planId] = { windows: prev?.windows ?? [], limitedUntil: until, updatedAt: Date.now() };
+  // A streamed usage event may already have given the exact reset time. A
+  // later error with only a human-readable date must not erase it.
+  usage[planId] = { windows: prev?.windows ?? [], limitedUntil: until || prev?.limitedUntil || 0, updatedAt: Date.now() };
   save();
 }
 

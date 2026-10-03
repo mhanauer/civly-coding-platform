@@ -3172,7 +3172,7 @@ export default function App() {
               Log each plan in once. For Claude Max, type /usage inside a Claude
               session for the 5-hour and weekly limits. ChatGPT usage, credits,
               and resets come from its signed-in Codex account. When a plan runs dry
-              mid-session, the app switches to the next plan automatically,
+              mid-session, the app continues the request on the next plan automatically,
               another account of the same kind first. Each Claude or ChatGPT
               subscription you add signs in on its own and uses the same
               instructions, rules, skills and settings as your main account.

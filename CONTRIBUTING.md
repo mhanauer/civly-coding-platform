@@ -40,6 +40,7 @@ npm run typecheck
 npm run build                # the UI tests load the built app
 npm run test:accounts        # unit tests, plain Node
 npm run test:side
+npm run test:limit-fallback
 npm run test:auto-effort
 npm run test:data-dir
 npm run test:code-map        # the code-map test's tools (scripts/code-map)
@@ -76,12 +77,28 @@ test fails. `npm run push:check` runs the same checks without pushing.
 
 ## Releasing (maintainers)
 
-1. Update `version` in `package.json`, commit, and push.
-2. Tag the commit `v<version>` and push the tag.
+Releases are built on the maintainer's Mac, with the Developer ID certificate
+in the keychain and an App Store Connect API key for notarization:
 
-`.github/workflows/release.yml` then runs the tests, builds the app, signs it
-with the Developer ID, has Apple notarize it, and attaches the DMG to a GitHub
-Release. It reads these secrets from the repository's `release` environment:
+1. Update `version` in `package.json`, commit, and push.
+2. Build, sign, and notarize:
+
+   ```bash
+   APPLE_API_KEY=<path to the .p8> APPLE_API_KEY_ID=<key id> \
+     APPLE_API_ISSUER=<issuer id> npm run release
+   ```
+
+3. Tag the commit and publish the DMG:
+
+   ```bash
+   git tag v<version> && git push origin v<version>
+   gh release create v<version> release/*.dmg release/*.sha256 \
+     --verify-tag --generate-notes --title "Civly Coding Platform <version>"
+   ```
+
+`.github/workflows/release.yml` can do steps 2 and 3 on GitHub instead. It
+stays off until the repository variable `RELEASE_FROM_CI` is `true` and these
+secrets are set in the `release` environment:
 
 | Secret | What it holds |
 | --- | --- |
@@ -90,10 +107,3 @@ Release. It reads these secrets from the repository's `release` environment:
 | `APPLE_API_KEY_P8` | The text of an App Store Connect API key (.p8) |
 | `APPLE_API_KEY_ID` | That key's ID |
 | `APPLE_API_ISSUER` | Its issuer ID |
-
-To build a release on your own Mac, with the certificate in your keychain:
-
-```bash
-APPLE_API_KEY=<path to the .p8> APPLE_API_KEY_ID=<key id> \
-  APPLE_API_ISSUER=<issuer id> npm run release
-```
