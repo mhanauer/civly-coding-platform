@@ -885,6 +885,8 @@ function PermissionCard({
 }): JSX.Element {
   const { ev, decision } = item;
   const { sent, failed, send } = useCardAnswer();
+  // Always allow is the highlighted choice when the engine offers it
+  const canAlways = !!ev.suggestions && ev.suggestions.length > 0;
   const step = ev.step;
   const what = step?.target || (ev.input ? JSON.stringify(ev.input).slice(0, 200) : "");
   const answered = decision
@@ -919,12 +921,16 @@ function PermissionCard({
       {failed?.error ? <div className="perm-error">{failed.error}</div> : null}
       {!answered ? (
         <div className="perm-actions">
-          <button className="send-btn" disabled={sent} onClick={() => send(() => onAnswer(true, false))}>
+          <button
+            className={canAlways ? "mini-btn" : "send-btn"}
+            disabled={sent}
+            onClick={() => send(() => onAnswer(true, false))}
+          >
             Allow
           </button>
-          {ev.suggestions && ev.suggestions.length > 0 ? (
+          {canAlways ? (
             <button
-              className="mini-btn"
+              className="send-btn"
               disabled={sent}
               title="Allow, and save a rule so this is not asked again in this folder"
               onClick={() => send(() => onAnswer(true, true))}
