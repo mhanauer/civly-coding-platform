@@ -116,7 +116,7 @@ that port while it runs. Links you click in the app open in your own browser.
 
 ## Settings
 
-Three features built for one setup are off until you turn them on in
+Features built for one setup are off until you turn them on in
 Settings. They are saved in `~/.coding-plan-hub/settings.json`.
 
 - **Plain-English filter.** After each reply, a local scan looks for banned
@@ -127,6 +127,14 @@ Settings. They are saved in `~/.coding-plan-hub/settings.json`.
 - **Work on a dev branch.** Puts every project on a branch named `dev`,
   creating it where missing.
 - **Show ZCode's projects.** Lists ZCode's recent projects in the sidebar.
+- **Keep the CLIs up to date.** The CLIs update themselves only when you run
+  them in Terminal, and the app runs them headless. With this on, the app
+  checks Claude Code, Codex, Gemini and Kimi for new releases at launch and
+  every six hours, and updates each the way it was installed (npm, Homebrew,
+  Claude Code's native installer, or `kimi upgrade`) once no chat on it is
+  working. A new major version waits for an Update click, since it can change
+  the flags the app runs it with. Settings lists every CLI's version either
+  way.
 
 ## Projects
 
@@ -150,6 +158,7 @@ npm run test:accounts      # account homes and shared links
 npm run test:side          # side conversations
 npm run test:auto-effort   # Auto effort
 npm run test:data-dir      # the data folder is private to you
+npm run test:cli-updates   # CLI version checks and updates
 npm run test:chat          # UI smoke tests, run in Electron
 npm run test:questions
 npm run test:projects

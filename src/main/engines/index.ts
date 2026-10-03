@@ -55,7 +55,50 @@ function engineEnv(plan: PlanConfig): Record<string, string> {
   return env;
 }
 
+// A CLI mid-update can be half installed (cliUpdates.ts), so a run on it
+// starts once the install is done.
+const installs = new Map<EngineKind, Promise<void>>();
+
+export function holdEngine(engine: EngineKind, install: Promise<unknown>): void {
+  const done = install.then(
+    () => undefined,
+    () => undefined
+  );
+  installs.set(engine, done);
+  void done.then(() => {
+    if (installs.get(engine) === done) installs.delete(engine);
+  });
+}
+
 export function runEngine(
+  plan: PlanConfig,
+  opts: SendOptions,
+  onEvent: (e: EngineEvent) => void
+): RunHandle {
+  const install = installs.get(plan.engine);
+  if (!install) return startEngine(plan, opts, onEvent);
+  onEvent({ kind: "status", text: `Waiting for ${plan.bin} to finish updating` });
+  let started: RunHandle | undefined;
+  let cancelled = false;
+  const done = install.then(() => {
+    if (cancelled) {
+      onEvent({ kind: "done", ok: false });
+      return;
+    }
+    started = startEngine(plan, opts, onEvent);
+    return started.done;
+  });
+  return {
+    done,
+    cancel: () => {
+      cancelled = true;
+      started?.cancel();
+    },
+    respond: (...answer) => started?.respond(...answer)
+  };
+}
+
+function startEngine(
   plan: PlanConfig,
   opts: SendOptions,
   onEvent: (e: EngineEvent) => void

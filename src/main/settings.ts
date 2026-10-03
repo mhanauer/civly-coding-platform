@@ -15,10 +15,12 @@ export interface Settings {
   // Claude chats start without connectors, skills and slash commands, and
   // take them on when a message needs them (leanChats.ts)
   leanChats: boolean;
+  // the engine CLIs update to their latest release on their own (cliUpdates.ts)
+  updateClis: boolean;
 }
 
 const FILE = join(DATA_DIR, "settings.json");
-const DEFAULTS: Settings = { replyFilter: false, devBranch: false, zcodeProjects: false, leanChats: false };
+const DEFAULTS: Settings = { replyFilter: false, devBranch: false, zcodeProjects: false, leanChats: false, updateClis: false };
 const KEYS = Object.keys(DEFAULTS) as Array<keyof Settings>;
 
 export function loadSettings(): Settings {

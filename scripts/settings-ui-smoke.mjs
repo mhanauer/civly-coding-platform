@@ -2,7 +2,8 @@
 // built for one setup on and off (src/main/settings.ts). Each chat's Filter
 // control shows only with the plain-English filter on, a Claude chat's Tools
 // control only with lean chats on, and the project settings take effect
-// without a restart.
+// without a restart. Settings also lists each engine CLI's version, with an
+// Update button where the app can update it (src/main/cliUpdates.ts).
 // CPH_TEST_APP_ROOT can point to an extracted or packaged app to test its build.
 // CPH_TEST_SCREENSHOT=<file.png> saves the window with Settings open.
 import { app, BrowserWindow, ipcMain } from "electron";
@@ -21,7 +22,14 @@ const session = {
   fullAccess: false, filter: true, tools: "auto", autoFull: false, running: false, status: "done", empty: false,
   side: false, queue: [], createdAt: Date.now(), updatedAt: Date.now()
 };
-let settings = { replyFilter: false, devBranch: false, zcodeProjects: false, leanChats: false };
+let settings = { replyFilter: false, devBranch: false, zcodeProjects: false, leanChats: false, updateClis: false };
+let clis = [
+  { id: "claude", label: "Claude Code", installed: "2.1.288", latest: "2.1.288", state: "current" },
+  { id: "codex", label: "Codex", installed: "0.157.0", latest: "0.160.0", state: "behind" },
+  { id: "kimi", label: "Kimi Code", installed: "0.43.0", latest: "2.1.1", state: "held" },
+  { id: "browser", label: "Chrome DevTools MCP", installed: "1.10.1", latest: "1.11.0", state: "pinned" }
+];
+const updates = [];
 const saved = [];
 const patched = [];
 const calls = { list: 0, ensureDev: 0 };
@@ -46,6 +54,12 @@ const handlers = {
     return { summary: session };
   },
   "settings:get": () => settings,
+  "clis:status": () => clis,
+  "clis:update": (_event, engine) => {
+    updates.push(engine);
+    clis = clis.map((c) => (c.id === engine ? { ...c, state: "waiting" } : c));
+    return clis;
+  },
   "settings:set": (_event, patch) => {
     saved.push(patch);
     settings = { ...settings, ...patch };
@@ -102,8 +116,8 @@ app.whenReady().then(async () => {
 
     await check("Settings opens with everything off", async () => {
       await evaluate("Array.from(document.querySelectorAll('.usage-btn')).find(b => b.textContent === 'Settings').click()");
-      await waitFor("document.querySelectorAll('.setting-row').length === 4", "the four settings");
-      assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.setting-row input')).map(i => i.checked)"), [false, false, false, false]);
+      await waitFor("document.querySelectorAll('.setting-row').length === 5", "the five settings");
+      assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.setting-row input')).map(i => i.checked)"), [false, false, false, false, false]);
     });
 
     await check("turning lean chats on gives a Claude chat its Tools control, starting on Auto", async () => {
@@ -139,12 +153,41 @@ app.whenReady().then(async () => {
       assert.deepEqual(saved.at(-1), { zcodeProjects: true });
     });
 
+    const cliRows = "Array.from(document.querySelectorAll('.cli-row')).map(r => r.textContent)";
+    await check("Settings lists each CLI's version, with Update only where one is out", async () => {
+      await waitFor("document.querySelectorAll('.cli-row').length === 4", "the CLI rows");
+      assert.deepEqual(await evaluate(cliRows), [
+        "Claude Code2.1.288Up to date",
+        "Codex0.157.00.160.0 is outUpdate",
+        "Kimi Code0.43.02.1.1 is out. A new major version waits for you, since it can change how the app runs it.Update",
+        "Chrome DevTools MCP1.10.1Kept at this version on purpose. 1.11.0 is out; raise MCP_PACKAGE in src/main/chromeBrowser.ts to use it."
+      ]);
+    });
+
+    await check("Update on a held major version queues it until its chats finish", async () => {
+      await evaluate("Array.from(document.querySelectorAll('.cli-row')).find(r => r.textContent.startsWith('Kimi')).querySelector('button').click()");
+      await waitUntil(() => updates.length === 1, "the update");
+      assert.deepEqual(updates, ["kimi"]);
+      await waitFor(`${cliRows}[2] === "Kimi Code0.43.0Updates to 2.1.1 once its chats finish"`, "the waiting note");
+    });
+
+    await check("the list follows an update the main process reports", async () => {
+      window.webContents.send("clis:changed", clis.map((c) => (c.id === "kimi" ? { ...c, installed: "2.1.1", state: "current" } : c)));
+      await waitFor(`${cliRows}[2] === "Kimi Code2.1.1Up to date"`, "the updated row");
+    });
+
+    await check("turning CLI updates on saves it", async () => {
+      await toggle("Keep the CLIs up to date");
+      await waitUntil(() => saved.at(-1)?.updateClis === true, "the save");
+      assert.deepEqual(saved.at(-1), { updateClis: true });
+    });
+
     await check("turning the dev branch on puts the projects on dev", async () => {
       const before = calls.ensureDev;
       await toggle("Work on a dev branch");
       await waitUntil(() => calls.ensureDev > before, "the dev branch pass");
       assert.deepEqual(saved.at(-1), { devBranch: true });
-      assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.setting-row input')).map(i => i.checked)"), [true, true, true, true]);
+      assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.setting-row input')).map(i => i.checked)"), [true, true, true, true, true]);
       if (process.env.CPH_TEST_SCREENSHOT) {
         writeFileSync(process.env.CPH_TEST_SCREENSHOT, (await window.webContents.capturePage()).toPNG());
       }

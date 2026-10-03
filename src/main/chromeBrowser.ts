@@ -20,7 +20,7 @@ export const BROWSER_ENDPOINT = `http://127.0.0.1:${PORT}`;
 // downloaded turned up as a stray Drive copy.
 export const BROWSER_DOWNLOADS = join(DATA_DIR, "downloads");
 // pinned so a new release never changes chats mid-week; bump by hand
-const MCP_PACKAGE = "chrome-devtools-mcp@1.10.1";
+export const MCP_PACKAGE = "chrome-devtools-mcp@1.10.1";
 
 // Engines that take an MCP server on the command line
 export function usesBrowser(engine: EngineKind): boolean {

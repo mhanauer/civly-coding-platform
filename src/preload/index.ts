@@ -3,6 +3,7 @@ import type { EngineEvent, PlanConfig, UsageWindow } from "../main/engines/types
 import type { BrowserCheck } from "../main/browserChecks.ts";
 import type { CodexCredits, CodexResets } from "../main/codexAccountUsage.ts";
 import type { Settings } from "../main/settings.ts";
+import type { CliStatus } from "../main/cliUpdates.ts";
 import type { Tools } from "../main/leanChats.ts";
 
 export interface PlanUsage {
@@ -175,6 +176,14 @@ const api = {
     ipcRenderer.invoke("projects:checkout", path, branch),
   getSettings: (): Promise<Settings> => ipcRenderer.invoke("settings:get"),
   setSettings: (patch: Partial<Settings>): Promise<Settings> => ipcRenderer.invoke("settings:set", patch),
+  // the engine CLIs' versions and updates (src/main/cliUpdates.ts)
+  cliStatus: (): Promise<CliStatus[]> => ipcRenderer.invoke("clis:status"),
+  updateCli: (engine: string): Promise<CliStatus[]> => ipcRenderer.invoke("clis:update", engine),
+  onCliStatus: (cb: (list: CliStatus[]) => void): (() => void) => {
+    const listener = (_e: unknown, list: CliStatus[]): void => cb(list);
+    ipcRenderer.on("clis:changed", listener);
+    return () => ipcRenderer.removeListener("clis:changed", listener);
+  },
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke("pick:folder"),
   pickFiles: (): Promise<string[] | null> => ipcRenderer.invoke("pick:files"),
   pathForFile: (file: File): string => webUtils.getPathForFile(file),

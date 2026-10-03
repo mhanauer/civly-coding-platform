@@ -4,6 +4,7 @@ import type { EngineEvent, PlanConfig } from "../../main/engines/types.ts";
 import type { Tools } from "../../main/leanChats.ts";
 import type { BrowserCheck } from "../../main/browserChecks.ts";
 import type { Settings } from "../../main/settings.ts";
+import type { CliStatus } from "../../main/cliUpdates.ts";
 import markUrl from "../assets/civly-mark.png";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -287,6 +288,58 @@ function CodexExtras({ usage }: { usage?: PlanUsage }): JSX.Element | null {
           ))}
         </>
       ) : null}
+    </div>
+  );
+}
+
+function cliNote(c: CliStatus): string {
+  const to = c.latest ? ` to ${c.latest}` : "";
+  switch (c.state) {
+    case "current":
+      return "Up to date";
+    case "behind":
+      return `${c.latest} is out`;
+    case "held":
+      return `${c.latest} is out. A new major version waits for you, since it can change how the app runs it.`;
+    case "manual":
+      return `${c.latest} is out. Update it the way you installed it.`;
+    case "waiting":
+      return `Updates${to} once its chats finish`;
+    case "updating":
+      return `Updating${to}`;
+    case "failed":
+      return `Update failed: ${c.error ?? "no reason given"}`;
+    case "pinned":
+      return c.latest
+        ? `Kept at this version on purpose. ${c.latest} is out; raise MCP_PACKAGE in src/main/chromeBrowser.ts to use it.`
+        : "Kept at this version on purpose";
+    default:
+      return "Could not check for a newer version";
+  }
+}
+
+// Each engine CLI's version, and its update (src/main/cliUpdates.ts)
+function CliVersions(): JSX.Element {
+  const [clis, setClis] = useState<CliStatus[]>([]);
+  useEffect(() => {
+    window.hub.cliStatus().then(setClis).catch(() => undefined);
+    return window.hub.onCliStatus(setClis);
+  }, []);
+  if (!clis.length) return <div className="cli-versions cli-note">Checking the CLIs for new versions</div>;
+  return (
+    <div className="cli-versions">
+      {clis.map((c) => (
+        <div className="cli-row" key={c.id}>
+          <span className="cli-name">{c.label}</span>
+          <span className="cli-version">{c.installed}</span>
+          <span className="cli-note">{cliNote(c)}</span>
+          {c.state === "behind" || c.state === "held" || c.state === "failed" ? (
+            <button className="mini-btn" onClick={() => void window.hub.updateCli(c.id).then(setClis)}>
+              Update
+            </button>
+          ) : null}
+        </div>
+      ))}
     </div>
   );
 }
@@ -1919,7 +1972,13 @@ export default function App() {
   const dropOnSideRef = useRef<(paths: string[]) => void>(() => undefined);
   const [usageOpen, setUsageOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settings, setSettings] = useState<Settings>({ replyFilter: false, devBranch: false, zcodeProjects: false, leanChats: false });
+  const [settings, setSettings] = useState<Settings>({
+    replyFilter: false,
+    devBranch: false,
+    zcodeProjects: false,
+    leanChats: false,
+    updateClis: false
+  });
   // a newer build is installed; waiting = restart once no chat is working
   const [update, setUpdate] = useState<{ ready: boolean; waiting: boolean }>({ ready: false, waiting: false });
   const [usage, setUsage] = useState<Record<string, PlanUsage>>({});
@@ -3070,6 +3129,20 @@ export default function App() {
                 Full.
               </span>
             </label>
+            <label className="setting-row">
+              <input
+                type="checkbox"
+                checked={settings.updateClis}
+                onChange={(e) => void changeSetting({ updateClis: e.target.checked })}
+              />
+              <span>
+                <strong>Keep the CLIs up to date</strong>
+                Checks Claude Code, Codex, Gemini and Kimi for new releases at launch and every six hours, and installs
+                each one the way it was installed, once no chat on it is working. A new major version waits for you to
+                click Update.
+              </span>
+            </label>
+            <CliVersions />
           </div>
         </div>
       ) : null}

@@ -22,11 +22,12 @@ import { showCheck, watchBrowserChecks, type BrowserCheck } from "./browserCheck
 import { adoptShellEnv } from "./shellPath.ts";
 import { filterText } from "./filter.ts";
 import { loadSettings, saveSettings, type Settings } from "./settings.ts";
+import { checkClis, freshCliStatus, startCliUpdates, updateCli } from "./cliUpdates.ts";
 import { newestWithin, recapLines, sideContext } from "./recap.ts";
 import { AUTO, resolveEffort } from "./autoEffort.ts";
 import { CARRY_ON, fullToolsReason, leanNote, markerFilter, runsLean, switchedNote, TOOLS, type Tools } from "./leanChats.ts";
 import { allUsage, onUsageChange, recordLimitError, recordUsage, refreshCodex, refreshPlanUsage } from "./usage.ts";
-import type { EngineEvent, PlanConfig, RunHandle } from "./engines/types.ts";
+import type { EngineEvent, EngineKind, PlanConfig, RunHandle } from "./engines/types.ts";
 
 app.setName("Civly Coding Platform");
 // before any engine or terminal starts: a Dock launch has a bare PATH and
@@ -670,6 +671,11 @@ app.whenReady().then(() => {
   pollUsage();
   setInterval(pollUsage, 10 * 60 * 1000);
   watchForUpdate();
+  startCliUpdates({
+    busy: (engine) => [...sessions.values()].some((s) => s.running && s.plan.engine === engine),
+    auto: () => loadSettings().updateClis,
+    onChange: (list) => mainWindow?.webContents.send("clis:changed", list)
+  });
   warmBrowserServer();
   watchBrowserChecks({
     endpoint: BROWSER_ENDPOINT,
@@ -906,7 +912,15 @@ ipcMain.handle("projects:ensure-dev", (_e, path: string) =>
 );
 
 ipcMain.handle("settings:get", () => loadSettings());
-ipcMain.handle("settings:set", (_e, patch: Partial<Settings>) => saveSettings(patch));
+ipcMain.handle("settings:set", (_e, patch: Partial<Settings>) => {
+  const saved = saveSettings(patch);
+  // turned on: catch up now rather than at the next check
+  if (patch?.updateClis === true) void checkClis();
+  return saved;
+});
+
+ipcMain.handle("clis:status", () => freshCliStatus());
+ipcMain.handle("clis:update", (_e, engine: EngineKind) => updateCli(engine));
 
 ipcMain.handle("projects:checkout", (_e, path: string, branch: string) => {
   const error = gitCheckout(path, branch);
