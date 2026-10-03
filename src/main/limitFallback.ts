@@ -89,7 +89,13 @@ export function nextPlanAfterLimit(
       !unavailable.has(plan.id) &&
       (plan.loggedIn || Boolean(plan.env?.ANTHROPIC_AUTH_TOKEN || plan.env?.ANTHROPIC_API_KEY))
   );
-  const rank = (plan: PlanConfig): number =>
-    conversationStore(plan) === store ? 0 : plan.engine === current.engine ? 1 : 2;
+  // OpenRouter is pay-per-use, so subscriptions take over first and it stays
+  // the last resort even when it could resume the engine conversation.
+  const payPerUse = (plan: PlanConfig): boolean =>
+    Boolean(plan.env?.ANTHROPIC_BASE_URL && /openrouter\.ai/.test(plan.env.ANTHROPIC_BASE_URL));
+  const rank = (plan: PlanConfig): number => {
+    const tier = conversationStore(plan) === store ? 0 : plan.engine === current.engine ? 1 : 2;
+    return tier + (payPerUse(plan) ? 3 : 0);
+  };
   return candidates.sort((a, b) => rank(a) - rank(b))[0] ?? null;
 }

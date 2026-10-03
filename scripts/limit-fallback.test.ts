@@ -54,6 +54,24 @@ test("a retry can resume on another account and skips every exhausted plan", () 
   assert.equal(nextPlanAfterLimit(current, plans, new Set([current.id, sameStore.id, other.id]), store), null);
 });
 
+test("an OpenRouter key is the last resort behind every subscription", () => {
+  const current = plan("claude-main", "claude");
+  const openrouter: PlanConfig = {
+    ...plan("openrouter", "claude", false),
+    env: { ANTHROPIC_AUTH_TOKEN: "sk-or", ANTHROPIC_BASE_URL: "https://openrouter.ai/api/v1" }
+  };
+  const zai: PlanConfig = {
+    ...plan("zai", "claude", false),
+    env: { ANTHROPIC_AUTH_TOKEN: "sk-zai", ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic" }
+  };
+  const store = (p: PlanConfig): string => p.engine;
+  // even a resumable OpenRouter conversation loses to a subscription
+  const resumable = [current, openrouter, plan("chatgpt", "codex")];
+  assert.equal(nextPlanAfterLimit(current, resumable, new Set([current.id]), store)?.id, "chatgpt");
+  // and it is still picked when nothing else is left
+  assert.equal(nextPlanAfterLimit(current, [current, openrouter, zai], new Set([current.id, "zai"]), store)?.id, "openrouter");
+});
+
 test("a successful retry determines status without the previous limit error", () => {
   const events: EngineEvent[] = [
     { kind: "error", text: "weekly limit reached" },
