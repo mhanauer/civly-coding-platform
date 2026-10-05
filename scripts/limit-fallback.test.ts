@@ -6,13 +6,16 @@ import { join } from "node:path";
 import {
   AUTO_RETRY_PREFIX,
   carriesOn,
+  hitModelCapacity,
   hitPlanLimit,
   latestAttempt,
   nextPlanAfterLimit,
   planIsOut,
-  resetTimeFromText
+  resetTimeFromText,
+  untriedModel
 } from "../src/main/limitFallback.ts";
 import { claudeAdapter } from "../src/main/engines/claude.ts";
+import { codexAdapter } from "../src/main/engines/codex.ts";
 import type { EngineEvent, PlanConfig } from "../src/main/engines/types.ts";
 
 const dataDir = mkdtempSync(join(tmpdir(), "cph-limit-"));
@@ -157,4 +160,24 @@ test("a turn that failed on the limit reports the plan as out, and the notice is
   assert.equal(carriesOn({ kind: "tool_result", id: "t", ok: true, output: "moved to the background" }), false);
   assert.equal(carriesOn({ kind: "text", text: "Done." }), true);
   assert.equal(carriesOn({ kind: "delta", text: "D" }), true);
+});
+
+test("a model at capacity is not a plan limit, and the chat tries another model", () => {
+  const events: EngineEvent[] = [];
+  const adapter = codexAdapter();
+  const emit = (event: EngineEvent): void => { events.push(event); };
+  adapter.parseLine(JSON.stringify({ type: "error", message: "Selected model is at capacity. Please try a different model." }), emit);
+  adapter.parseLine(JSON.stringify({ type: "turn.failed", error: { message: "Selected model is at capacity. Please try a different model." } }), emit);
+  assert.equal(hitModelCapacity(events), true);
+  assert.equal(hitPlanLimit(events), false);
+  // Claude Code gives up on repeated overloads with a failed result
+  assert.equal(hitModelCapacity([{ kind: "done", ok: false, summary: "API Error: Repeated 529 Overloaded errors" }]), true);
+  assert.equal(hitModelCapacity([{ kind: "error", text: "Selected model is at capacity." }, { kind: "done", ok: true }]), false);
+  assert.equal(hitModelCapacity([{ kind: "error", text: "Command failed" }, { kind: "done", ok: false }]), false);
+
+  const codex: PlanConfig = { ...plan("chatgpt", "codex"), models: ["gpt-6-sol", "gpt-6-astra"] };
+  assert.equal(untriedModel(codex, new Set(["gpt-6-sol"])), "gpt-6-astra");
+  assert.equal(untriedModel(codex, new Set(["gpt-6-astra"])), "gpt-6-sol");
+  assert.equal(untriedModel(codex, new Set(["gpt-6-sol", "gpt-6-astra"])), null);
+  assert.equal(untriedModel({ ...plan("keys", "claude"), models: ["default"] }, new Set(["default"])), null);
 });

@@ -119,6 +119,9 @@ moves on the same way. That includes a Claude chat whose turn failed on the
 limit while a background agent or command kept it open.
 If every signed-in plan is out, add an account or send the request again after
 a reset.
+When a model is at capacity ("Selected model is at capacity", or an overloaded
+error), the chat continues on the plan's other model, then on the next plan
+with quota. A model at capacity is not counted against its plan's quota.
 Deleting an added account signs it out and removes its home.
 
 ## Usage
@@ -186,7 +189,7 @@ no effect.
 npm run typecheck          # both TypeScript projects
 npm run test:accounts      # account homes and shared links
 npm run test:side          # side conversations and plan hand-offs
-npm run test:limit-fallback # automatic plan continuation at usage limits
+npm run test:limit-fallback # automatic continuation at usage limits and model capacity
 npm run test:auto-effort   # Auto effort
 npm run test:data-dir      # the data folder is private to you
 npm run test:cli-updates   # CLI version checks and updates

@@ -7,6 +7,15 @@ export function isLimitError(text: string): boolean {
   return LIMIT_PATTERNS.test(text);
 }
 
+// The model's servers are full: Codex's "Selected model is at capacity. Please
+// try a different model.", or an overloaded error from Claude, Gemini or Kimi.
+// The plan still has quota, so this is not saved as a limit.
+const CAPACITY_PATTERNS = /at capacity|overloaded/i;
+
+export function isCapacityError(text: string): boolean {
+  return CAPACITY_PATTERNS.test(text);
+}
+
 export const AUTO_RETRY_PREFIX = "Continuing automatically on ";
 
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
@@ -99,6 +108,20 @@ export function hitPlanLimit(events: readonly EngineEvent[]): boolean {
   return events.some((event) => event.kind === "usage" && event.limited) ||
     events.some((event) => event.kind === "error" && isLimitError(event.text)) ||
     Boolean(done.summary && isLimitError(done.summary));
+}
+
+// A failed turn whose engine said the model is at capacity.
+export function hitModelCapacity(events: readonly EngineEvent[]): boolean {
+  const done = [...events].reverse().find((event) => event.kind === "done");
+  if (!done || done.kind !== "done" || done.ok) return false;
+  return events.some((event) => event.kind === "error" && isCapacityError(event.text)) ||
+    Boolean(done.summary && isCapacityError(done.summary));
+}
+
+// The first model in a plan's list that was not at capacity this turn. A plan
+// with only the "default" placeholder has no other model to offer.
+export function untriedModel(plan: PlanConfig, tried: ReadonlySet<string>): string | null {
+  return (plan.models ?? []).find((model) => model !== "default" && !tried.has(model)) ?? null;
 }
 
 // A run that reported a limit and then went quiet is waiting out the reset.

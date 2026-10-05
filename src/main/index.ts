@@ -26,7 +26,17 @@ import { checkClis, freshCliStatus, startCliUpdates, updateCli } from "./cliUpda
 import { handoffContext, sideContext } from "./recap.ts";
 import { AUTO, resolveEffort } from "./autoEffort.ts";
 import { CARRY_ON, fullToolsReason, leanNote, markerFilter, runsLean, switchedNote, TOOLS, type Tools } from "./leanChats.ts";
-import { AUTO_RETRY_PREFIX, carriesOn, hitPlanLimit, isLimitError, latestAttempt, nextPlanAfterLimit, planIsOut } from "./limitFallback.ts";
+import {
+  AUTO_RETRY_PREFIX,
+  carriesOn,
+  hitModelCapacity,
+  hitPlanLimit,
+  isLimitError,
+  latestAttempt,
+  nextPlanAfterLimit,
+  planIsOut,
+  untriedModel
+} from "./limitFallback.ts";
 import { allUsage, onUsageChange, recordLimitError, recordUsage, refreshCodex, refreshPlanUsage } from "./usage.ts";
 import { codexRoutingTimedOut } from "./codexRoutingRecovery.ts";
 import type { EngineEvent, EngineKind, PlanConfig, RunHandle } from "./engines/types.ts";
@@ -1112,7 +1122,13 @@ function startTurn(
   session: Session,
   prompt: string,
   enginePrompt?: string,
-  options: { recordUser?: boolean; triedPlans?: readonly string[]; routingRetries?: number } = {}
+  options: {
+    recordUser?: boolean;
+    triedPlans?: readonly string[];
+    // models that were at capacity earlier in this turn
+    triedModels?: readonly string[];
+    routingRetries?: number;
+  } = {}
 ): void {
   // A plan already known to be out would fail, or wait for its reset with no
   // reply. The message goes to the next plan with quota instead.
@@ -1121,6 +1137,7 @@ function startTurn(
   const skipTo = planIsOut(outUsage) ? nextPlanWithQuota(outPlan, options.triedPlans ?? []) : null;
   if (skipTo) switchPlan(session, skipTo);
   const runPlan = session.plan;
+  const runModel = session.model;
   const triedPlans = new Set(options.triedPlans ?? []);
   triedPlans.add(runPlan.id);
   const limitEvents: EngineEvent[] = [];
@@ -1280,6 +1297,42 @@ function startTurn(
       pushEvent(session, {
         kind: "error",
         text: "No other signed-in plan has quota. Add an account or wait for a reset, then send your message again."
+      });
+    }
+    // The model is at capacity. Another model on the same plan keeps the
+    // engine conversation, so it goes first; then the next plan with quota,
+    // on a model that was not at capacity this turn when it has one.
+    if (
+      !hitLimit && !stopped && hitModelCapacity(limitEvents) &&
+      session.plan.id === runPlan.id && sessions.get(session.id) === session
+    ) {
+      const triedModels = new Set([...(options.triedModels ?? []), runModel]);
+      const was = runModel === "default" ? runPlan.label : runModel;
+      const model = untriedModel(runPlan, triedModels);
+      const next = model ? null : nextPlanWithQuota(runPlan, triedPlans);
+      if (model || next) {
+        if (next) {
+          switchPlan(session, next);
+          session.model = untriedModel(next, triedModels) ?? session.model;
+        } else if (model) session.model = model;
+        const now = next ? next.label : session.model;
+        pushEvent(session, { kind: "status", text: `${AUTO_RETRY_PREFIX}${now} after ${was} was at capacity.` });
+        // a plan switch adds its own note about the new plan and model
+        const moved = next ? `${was} was at capacity.` : `${was} was at capacity, so this chat now runs on ${session.model}.`;
+        const continuation = session.resumeId
+          ? `[${moved} Continue and finish my most recent request from where you left off. Check the current state before repeating an action.]`
+          : `[${moved} Continue and finish my request below. Check the current state before repeating an action.]\n\n${prompt}`;
+        startTurn(session, prompt, continuation, {
+          recordUser: false,
+          triedPlans: [...triedPlans, ...(next ? [next.id] : [])],
+          triedModels: [...triedModels]
+        });
+        sendSessions();
+        return;
+      }
+      pushEvent(session, {
+        kind: "error",
+        text: "No other model or signed-in plan is free to take over. Send your message again in a few minutes."
       });
     }
     // Claude asked for the connectors, skills and slash commands: the chat
