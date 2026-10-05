@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { EngineAdapter, EngineEvent, SendOptions, TokenCount } from "./types.ts";
 import { classifyTool } from "./steps.ts";
 import { denyMessage } from "./claudeDeny.ts";
+import { isLimitError } from "../limitFallback.ts";
 
 interface ContentBlock {
   type?: string;
@@ -64,6 +65,10 @@ interface StreamLine {
   tasks?: Array<{ task_type?: string }>;
   // init: the MCP servers this run has and whether each connected
   mcp_servers?: Array<{ name?: string; status?: string }>;
+  // api_retry: why a request failed and how long until the next try
+  error?: string;
+  error_status?: number | null;
+  retry_delay_ms?: number;
   permission_denials?: Array<{ tool_name?: string; tool_use_id?: string; tool_input?: Record<string, unknown> }>;
   // on a result: tokens per model, background helpers' included, and their
   // price at API list rates
@@ -272,6 +277,17 @@ export function claudeAdapter(): EngineAdapter {
           const servers = (obj.mcp_servers ?? []).filter((s) => s.status === "connected" && s.name).map((s) => s.name as string);
           emit({ kind: "session", engineSessionId: obj.session_id, ...(obj.mcp_servers ? { servers } : {}) });
         }
+        // Claude Code can wait out a usage limit instead of failing: it
+        // retries at the reset and says so here. A wait that long means the
+        // plan is out, and the chat moves on (index.ts) rather than sit idle.
+        // Short waits are ordinary rate-limit backoff.
+        if (
+          obj.subtype === "api_retry" &&
+          (obj.error === "rate_limit" || obj.error_status === 429) &&
+          (obj.retry_delay_ms ?? 0) >= 60_000
+        ) {
+          emit({ kind: "usage", windows: [], limited: true });
+        }
         if (obj.subtype === "background_tasks_changed" && Array.isArray(obj.tasks)) {
           const running = obj.tasks.filter((t) => t.task_type !== "local_bash").length;
           // an agent that just finished brings its own turn; wait for its result
@@ -348,6 +364,10 @@ export function claudeAdapter(): EngineAdapter {
         }
         if (!obj.origin || obj.user_message_uuids?.includes(promptId)) promptDone = true;
         settled = true;
+        // The turn failed on the plan's limit. Claude Code stays open while
+        // a background agent or command runs, and those are on the same
+        // plan, so the chat moves on (index.ts) instead of waiting for them.
+        if (obj.is_error && obj.result && isLimitError(obj.result)) emit({ kind: "usage", windows: [], limited: true });
         emit({
           kind: "done",
           ok: !obj.is_error,

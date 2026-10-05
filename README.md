@@ -106,12 +106,17 @@ whole and replaces its link, the next run puts the newer copy back in the main
 home and relinks it. An older copy is kept beside it as
 `<name>.unlinked-<time>`.
 
-When a plan hits its hourly or weekly limit, the chat continues the request
+When a plan hits its session, hourly or weekly limit, the chat continues the request
 automatically on another signed-in account of the same kind if one has quota.
 Otherwise it uses another available plan and passes along the conversation:
 your first message, the most recent part of the chat, the last steps of the
 turn the limit cut off, and where the chat's full record is saved. Switching a
 chat to another kind of plan yourself passes it along the same way.
+A message sent to a plan the app already knows is out goes straight to the next
+plan with quota, and the chat says so. If an engine reports its plan is out but
+waits for the reset instead of failing, the app stops it after 10 seconds and
+moves on the same way. That includes a Claude chat whose turn failed on the
+limit while a background agent or command kept it open.
 If every signed-in plan is out, add an account or send the request again after
 a reset.
 Deleting an added account signs it out and removes its home.
@@ -226,6 +231,10 @@ your real logins, so messages it sends count against your plans.
   but cannot run.
 - Chats persist across restarts. If a restart cuts off a running turn, the app
   resumes it on next launch. Turns you stopped stay stopped.
+- If Codex exhausts its connection retries while finding the ChatGPT workspace,
+  the app makes one new attempt in the saved chat. It asks Codex to check the
+  current state before repeating commands. If that attempt fails, the chat
+  waits for you to continue it.
 
 ## Contributing
 

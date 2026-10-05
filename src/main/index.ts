@@ -26,8 +26,9 @@ import { checkClis, freshCliStatus, startCliUpdates, updateCli } from "./cliUpda
 import { handoffContext, sideContext } from "./recap.ts";
 import { AUTO, resolveEffort } from "./autoEffort.ts";
 import { CARRY_ON, fullToolsReason, leanNote, markerFilter, runsLean, switchedNote, TOOLS, type Tools } from "./leanChats.ts";
-import { AUTO_RETRY_PREFIX, hitPlanLimit, isLimitError, latestAttempt, nextPlanAfterLimit } from "./limitFallback.ts";
+import { AUTO_RETRY_PREFIX, carriesOn, hitPlanLimit, isLimitError, latestAttempt, nextPlanAfterLimit, planIsOut } from "./limitFallback.ts";
 import { allUsage, onUsageChange, recordLimitError, recordUsage, refreshCodex, refreshPlanUsage } from "./usage.ts";
+import { codexRoutingTimedOut } from "./codexRoutingRecovery.ts";
 import type { EngineEvent, EngineKind, PlanConfig, RunHandle } from "./engines/types.ts";
 
 app.setName("Civly Coding Platform");
@@ -1092,14 +1093,33 @@ function rememberConnectors(planId: string, servers: string[]): void {
   }
 }
 
+// Plans the app knows are out, and the next plan with quota after `current`.
+function nextPlanWithQuota(current: PlanConfig, tried: Iterable<string>): PlanConfig | null {
+  const usage = allUsage();
+  const unavailable = new Set([...tried, ...Object.keys(usage).filter((id) => planIsOut(usage[id]))]);
+  return nextPlanAfterLimit(current, loadPlans(), unavailable, conversationStore);
+}
+
+// A run that reports its plan is out but keeps going without a reply is
+// stopped after this long, so the chat can move to the next plan. Claude
+// Code does this when it waits for the reset, and when a background agent
+// or command keeps it open after the turn failed on the limit.
+const LIMIT_STALL_MS = 10_000;
+
 // Starts one turn. The transcript shows `prompt`; the engine receives
 // `enginePrompt` when given, so steer can add context the user never typed.
 function startTurn(
   session: Session,
   prompt: string,
   enginePrompt?: string,
-  options: { recordUser?: boolean; triedPlans?: readonly string[] } = {}
+  options: { recordUser?: boolean; triedPlans?: readonly string[]; routingRetries?: number } = {}
 ): void {
+  // A plan already known to be out would fail, or wait for its reset with no
+  // reply. The message goes to the next plan with quota instead.
+  const outPlan = session.plan;
+  const outUsage = allUsage()[outPlan.id];
+  const skipTo = planIsOut(outUsage) ? nextPlanWithQuota(outPlan, options.triedPlans ?? []) : null;
+  if (skipTo) switchPlan(session, skipTo);
   const runPlan = session.plan;
   const triedPlans = new Set(options.triedPlans ?? []);
   triedPlans.add(runPlan.id);
@@ -1154,6 +1174,12 @@ function startTurn(
   if (options.recordUser !== false) {
     pushEvent(session, { kind: "user", text: prompt, ...(picked === AUTO ? { effort } : {}) });
   }
+  if (skipTo) {
+    const outUntil = outUsage?.limitedUntil;
+    const until = outUntil ? ` until ${new Date(outUntil).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}` : "";
+    pushEvent(session, { kind: "status", text: `${outPlan.label} is out of quota${until}, so this went to ${skipTo.label}.` });
+    sendSessions();
+  }
   if (plainly) pushEvent(session, { kind: "status", text: switchedNote(`the message asks for ${plainly}`) });
   const turnStart = session.transcript.length;
   // an added account picks up anything new in the main CLI home
@@ -1162,7 +1188,10 @@ function startTurn(
   // up well before the chat's first browser step; nothing waits on it
   if (browser) void ensureBrowser();
 
-  session.handle = runEngine(
+  let limitStall: ReturnType<typeof setTimeout> | undefined;
+  let repliedSinceLimit = false;
+  let stalledOnLimit = false;
+  const handle = runEngine(
     runPlan,
     {
       prompt: toEngine,
@@ -1176,11 +1205,27 @@ function startTurn(
       lean
     },
     (event) => {
+      // the stall stop below already explains itself as a limit; the
+      // engine's own exit message would only add noise
+      if (stalledOnLimit && event.kind === "error") return;
+      if (event.kind === "done") clearTimeout(limitStall);
+      if (carriesOn(event)) repliedSinceLimit = true;
+      if (event.kind === "usage" && event.limited && !limitStall) {
+        repliedSinceLimit = false;
+        limitStall = setTimeout(() => {
+          // a run that carried on may still hit the limit again later
+          limitStall = undefined;
+          if (repliedSinceLimit || session.handle !== handle || !session.running) return;
+          stalledOnLimit = true;
+          handle.cancel();
+        }, LIMIT_STALL_MS);
+      }
       if (event.kind === "usage" || event.kind === "error" || event.kind === "done") limitEvents.push(event);
       if (!lean && event.kind === "session" && event.servers) rememberConnectors(runPlan.id, event.servers);
       for (const e of watch ? watch.feed(event) : [event]) pushEvent(session, e);
     }
   );
+  session.handle = handle;
 
   session.handle.done.then(async () => {
     session.running = false;
@@ -1189,6 +1234,25 @@ function startTurn(
     if (session.steering) return;
     const stopped = session.transcript.slice(turnStart).some((e) => e.kind === "status" && e.text === STOPPED);
     const hitLimit = hitPlanLimit(limitEvents);
+    if (
+      runPlan.engine === "codex" && !stopped && !hitLimit &&
+      (options.routingRetries ?? 0) < 1 && codexRoutingTimedOut(limitEvents) &&
+      session.plan.id === runPlan.id && sessions.get(session.id) === session
+    ) {
+      pushEvent(session, { kind: "status", text: `${AUTO_RETRY_PREFIX}${runPlan.label} after a connection timeout.` });
+      const transcriptLength = session.transcript.length;
+      // A new process can resume the saved chat, but its old terminal
+      // process IDs cannot be polled. Check the work before rerunning it.
+      setTimeout(() => {
+        if (sessions.get(session.id) !== session || session.running || session.transcript.length !== transcriptLength) return;
+        const continuation = session.resumeId
+          ? "[The Codex workspace connection timed out. Continue unfinished work. Old terminal process IDs are no longer valid; start fresh commands. Check the current state before repeating any action.]"
+          : `[The Codex workspace connection timed out before a resumable conversation was saved. Continue the user's request below. Check the current state before repeating any action.]\n\n${prompt}`;
+        startTurn(session, prompt, continuation, { recordUser: false, routingRetries: 1 });
+      }, 3000);
+      sendSessions();
+      return;
+    }
     if (hitLimit && !stopped && session.plan.id === runPlan.id && sessions.get(session.id) === session) {
       const current = runPlan;
       const limitText = [...limitEvents].reverse().find(
@@ -1197,21 +1261,18 @@ function startTurn(
       );
       if (limitText?.kind === "error") recordLimitError(current.id, limitText.text);
       else if (limitText?.kind === "done" && limitText.summary) recordLimitError(current.id, limitText.summary);
-      const usage = allUsage();
-      const unavailable = new Set([
-        ...triedPlans,
-        ...Object.entries(usage).filter(([, value]) => value.limitedUntil !== undefined).map(([id]) => id)
-      ]);
-      const next = nextPlanAfterLimit(current, loadPlans(), unavailable, conversationStore);
+      const next = nextPlanWithQuota(current, triedPlans);
       if (next) {
         switchPlan(session, next);
         pushEvent(session, {
           kind: "status",
           text: `${AUTO_RETRY_PREFIX}${next.label} after ${current.label} hit its limit.`
         });
+        // the stop also ended any background agent or command it had
+        const stoppedWork = stalledOnLimit ? " Its background agents and commands were stopped too; restart any that were unfinished." : "";
         const continuation = session.resumeId
-          ? "[The previous plan hit its usage limit. Continue and finish my most recent request from where you left off. Check the current state before repeating an action.]"
-          : `[The previous plan hit its usage limit. Continue and finish my request below. Check the current state before repeating an action.]\n\n${prompt}`;
+          ? `[The previous plan hit its usage limit.${stoppedWork} Continue and finish my most recent request from where you left off. Check the current state before repeating an action.]`
+          : `[The previous plan hit its usage limit.${stoppedWork} Continue and finish my request below. Check the current state before repeating an action.]\n\n${prompt}`;
         startTurn(session, prompt, continuation, { recordUser: false, triedPlans: [...triedPlans, next.id] });
         sendSessions();
         return;

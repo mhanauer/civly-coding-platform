@@ -123,7 +123,11 @@ export function codexAdapter(): EngineAdapter {
       }
 
       if (obj.type === "error") {
-        emit({ kind: "error", text: obj.message ?? "codex engine error" });
+        const message = obj.message ?? "codex engine error";
+        // Codex reports each connection attempt as an error event even
+        // while it is still retrying. Only the final failure needs the
+        // chat's error state.
+        emit({ kind: /^Reconnecting\.\.\. \d+\/\d+ \(/.test(message) ? "status" : "error", text: message });
         return;
       }
 

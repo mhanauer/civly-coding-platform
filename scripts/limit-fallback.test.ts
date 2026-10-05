@@ -5,11 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   AUTO_RETRY_PREFIX,
+  carriesOn,
   hitPlanLimit,
   latestAttempt,
   nextPlanAfterLimit,
+  planIsOut,
   resetTimeFromText
 } from "../src/main/limitFallback.ts";
+import { claudeAdapter } from "../src/main/engines/claude.ts";
 import type { EngineEvent, PlanConfig } from "../src/main/engines/types.ts";
 
 const dataDir = mkdtempSync(join(tmpdir(), "cph-limit-"));
@@ -107,4 +110,51 @@ test("a later error does not erase a reset time from Claude's usage event", () =
 test("an older saved limit recovers its reset time from the usage window", () => {
   assert.equal(usage.allUsage().oldClaude.limitedUntil, oldReset);
   assert.equal(usage.allUsage().resetClaude.limitedUntil, undefined);
+});
+
+test("a plan counts as out until its reset, or for 5 hours when the reset is unknown", () => {
+  const now = Date.parse("2026-10-04T09:00:00Z");
+  assert.equal(planIsOut(undefined, now), false);
+  assert.equal(planIsOut({ updatedAt: now }, now), false);
+  assert.equal(planIsOut({ limitedUntil: now + 60_000, updatedAt: now - 86_400_000 }, now), true);
+  assert.equal(planIsOut({ limitedUntil: now - 60_000, updatedAt: now - 120_000 }, now), false);
+  assert.equal(planIsOut({ limitedUntil: 0, updatedAt: now - 3_600_000 }, now), true);
+  assert.equal(planIsOut({ limitedUntil: 0, updatedAt: now - 6 * 3_600_000 }, now), false);
+});
+
+test("Claude Code waiting out a usage limit reports the plan as out", () => {
+  const events: EngineEvent[] = [];
+  const adapter = claudeAdapter();
+  const emit = (event: EngineEvent): void => { events.push(event); };
+  const retry = (delay: number): string => JSON.stringify({
+    type: "system", subtype: "api_retry", attempt: 1, max_retries: 10, retry_delay_ms: delay, error_status: 429, error: "rate_limit"
+  });
+  // ordinary backoff is not a limit
+  adapter.parseLine(retry(4_000), emit);
+  assert.deepEqual(events, []);
+  adapter.parseLine(retry(3 * 86_400_000), emit);
+  assert.deepEqual(events, [{ kind: "usage", windows: [], limited: true }]);
+});
+
+test("a session limit with only a reset time counts, and resets at the next such time", () => {
+  const text = "You've hit your session limit · resets 1:20pm (America/New_York)";
+  assert.equal(hitPlanLimit([{ kind: "text", text }, { kind: "done", ok: false, summary: text }]), true);
+  // 11:31 in New York: later today
+  assert.equal(resetTimeFromText(text, Date.parse("2026-10-05T15:31:00Z")), Date.parse("2026-10-05T17:20:00Z"));
+  // 14:00 in New York: tomorrow
+  assert.equal(resetTimeFromText(text, Date.parse("2026-10-05T18:00:00Z")), Date.parse("2026-10-06T17:20:00Z"));
+  // 22:00 in New York is already the next day in UTC
+  assert.equal(resetTimeFromText("resets 11pm (America/New_York)", Date.parse("2026-10-06T02:00:00Z")), Date.parse("2026-10-06T03:00:00Z"));
+});
+
+test("a turn that failed on the limit reports the plan as out, and the notice is not the run carrying on", () => {
+  const text = "You've hit your session limit · resets 1:20pm (America/New_York)";
+  const events: EngineEvent[] = [];
+  const adapter = claudeAdapter();
+  adapter.parseLine(JSON.stringify({ type: "result", subtype: "success", is_error: true, result: text }), (event) => { events.push(event); });
+  assert.deepEqual(events.slice(0, 2), [{ kind: "usage", windows: [], limited: true }, { kind: "done", ok: false, summary: text, tokens: undefined, costUsd: undefined }]);
+  assert.equal(carriesOn({ kind: "text", text }), false);
+  assert.equal(carriesOn({ kind: "tool_result", id: "t", ok: true, output: "moved to the background" }), false);
+  assert.equal(carriesOn({ kind: "text", text: "Done." }), true);
+  assert.equal(carriesOn({ kind: "delta", text: "D" }), true);
 });

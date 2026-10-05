@@ -1,7 +1,7 @@
 import type { EngineEvent, PlanConfig } from "./engines/types.ts";
 
 const LIMIT_PATTERNS =
-  /usage limit|rate[ _-]?limit|quota|429|\b\d+[- ]?hour limit|hourly limit|weekly limit|limit reached|exceeded|hit your limit|ran out/i;
+  /usage limit|rate[ _-]?limit|quota|429|\b\d+[- ]?hour limit|hourly limit|weekly limit|session limit|limit reached|exceeded|hit your limit|ran out/i;
 
 export function isLimitError(text: string): boolean {
   return LIMIT_PATTERNS.test(text);
@@ -36,10 +36,11 @@ function zonedTime(year: number, month: number, day: number, hour: number, minut
 }
 
 // Claude may say "resets Oct 7 at 3am (America/New_York)" instead of giving
-// an ISO timestamp. Choose the next occurrence when it leaves out the year.
+// an ISO timestamp. Choose the next occurrence when it leaves out the year,
+// or the date.
 export function resetTimeFromText(text: string, now = Date.now()): number | undefined {
   const match = /resets?\s+(?:on\s+)?([a-z]+)\s+(\d{1,2})(?:,?\s+(\d{4}))?\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)(?:\s*\(([^)]+)\))?/i.exec(text);
-  if (!match) return undefined;
+  if (!match) return resetClockFromText(text, now);
   const month = MONTHS.indexOf(match[1].slice(0, 3).toLowerCase());
   const day = Number(match[2]);
   const hour12 = Number(match[4]);
@@ -53,6 +54,42 @@ export function resetTimeFromText(text: string, now = Date.now()): number | unde
   return Number.isFinite(result) ? result : undefined;
 }
 
+// A session limit gives only the time: "resets 1:20pm (America/New_York)".
+// That is the next 1:20pm in that zone, today or tomorrow.
+function resetClockFromText(text: string, now: number): number | undefined {
+  const match = /resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)(?:\s*\(([^)]+)\))?/i.exec(text);
+  if (!match) return undefined;
+  const hour12 = Number(match[1]);
+  const minute = Number(match[2] ?? 0);
+  if (hour12 < 1 || hour12 > 12 || minute > 59) return undefined;
+  const hour = (hour12 % 12) + (match[3].toLowerCase() === "pm" ? 12 : 0);
+  const zone = match[4];
+  let year: number, month: number, day: number;
+  try {
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat("en-US", { timeZone: zone, year: "numeric", month: "numeric", day: "numeric" })
+        .formatToParts(new Date(now)).map((part) => [part.type, part.value])
+    );
+    [year, month, day] = [Number(parts.year), Number(parts.month) - 1, Number(parts.day)];
+  } catch {
+    const today = new Date(now);
+    [year, month, day] = [today.getFullYear(), today.getMonth(), today.getDate()];
+  }
+  let result = zonedTime(year, month, day, hour, minute, zone);
+  if (result < now - 60_000) result = zonedTime(year, month, day + 1, hour, minute, zone);
+  return Number.isFinite(result) ? result : undefined;
+}
+
+// A plan is out while its saved reset time is still ahead. A limit with no
+// known reset (0) counts for 5 hours, Claude's shortest window, so a plan
+// whose reset never came through is not skipped forever.
+const UNKNOWN_RESET_MS = 5 * 3_600_000;
+
+export function planIsOut(usage: { limitedUntil?: number; updatedAt: number } | undefined, now = Date.now()): boolean {
+  if (usage?.limitedUntil === undefined) return false;
+  return usage.limitedUntil ? usage.limitedUntil > now : now - usage.updatedAt < UNKNOWN_RESET_MS;
+}
+
 // A failed turn can report a limit as an error, a failed result, or a rejected
 // usage event. An error followed by a successful result may be from a tool,
 // rather than the subscription running out.
@@ -62,6 +99,15 @@ export function hitPlanLimit(events: readonly EngineEvent[]): boolean {
   return events.some((event) => event.kind === "usage" && event.limited) ||
     events.some((event) => event.kind === "error" && isLimitError(event.text)) ||
     Boolean(done.summary && isLimitError(done.summary));
+}
+
+// A run that reported a limit and then went quiet is waiting out the reset.
+// The limit notice itself ("You've hit your session limit · resets 1:20pm")
+// comes as reply text, so it does not count as the run carrying on. Nor does
+// a tool result: a command started before the limit can still finish.
+export function carriesOn(event: EngineEvent): boolean {
+  if (event.kind === "text") return !isLimitError(event.text);
+  return ["delta", "thinking", "thinking_delta", "tool", "permission"].includes(event.kind);
 }
 
 // A successful retry should determine the chat's status even though an
