@@ -6,3 +6,5 @@ dist/
 dist/
 dist.noindex/
 release/
+.claude/worktrees/
+.claude/settings.local.json

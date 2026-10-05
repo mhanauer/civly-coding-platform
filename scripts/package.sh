@@ -56,10 +56,13 @@ APP="$OUT/${APP_NAME}-darwin-arm64/${APP_NAME}.app"
 rm -rf "$OUT/${APP_NAME}-darwin-arm64"
 
 npm run build
+# .claude holds agent worktrees (each linking node_modules) and release holds
+# the DMG; neither belongs in the app, and copying the worktrees can hang
 npx electron-packager . "$APP_NAME" \
   --platform=darwin --arch=arm64 \
   --out="$OUT" --overwrite \
-  --ignore="^/node_modules" --ignore="^/dist" --ignore="^/dist\.noindex" --ignore="^/scripts" --ignore="^/\.git"
+  --ignore="^/node_modules" --ignore="^/dist" --ignore="^/dist\.noindex" --ignore="^/scripts" --ignore="^/\.git" \
+  --ignore="^/\.claude" --ignore="^/release"
 
 cp build/icon.icns "$APP/Contents/Resources/icon.icns"
 /usr/libexec/PlistBuddy \
