@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -16,6 +16,7 @@ export function userBinDirs(): string[] {
 }
 
 const MARK = "__CPH_ENV__";
+const READ_ENV = ["-ilc", `printf '${MARK}'; env -0; printf '${MARK}'`];
 
 // set by the shell about itself, not by the user's startup files
 const SHELL_OWN = new Set(["PWD", "OLDPWD", "SHLVL", "_"]);
@@ -31,22 +32,54 @@ const SHELL_OWN = new Set(["PWD", "OLDPWD", "SHLVL", "_"]);
 // user's login shell builds, once, at startup, so engines run the same as
 // they do from Terminal. What the app already has stays; PATH is merged.
 export function adoptShellEnv(): void {
-  const fromShell: Record<string, string> = {};
+  let stdout = "";
   try {
-    const r = spawnSync(process.env.SHELL || "/bin/zsh", ["-ilc", `printf '${MARK}'; env -0; printf '${MARK}'`], {
-      encoding: "utf8",
-      timeout: 5000,
-      stdio: ["ignore", "pipe", "ignore"]
-    });
-    // markers skip anything the shell's startup files print
-    const block = new RegExp(`${MARK}(.*?)${MARK}`, "s").exec(r.stdout ?? "")?.[1] ?? "";
-    for (const entry of block.split("\0")) {
-      const eq = entry.indexOf("=");
-      if (eq > 0) fromShell[entry.slice(0, eq)] = entry.slice(eq + 1);
-    }
+    stdout = spawnSync(shell(), READ_ENV, { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }).stdout ?? "";
   } catch {
     // no readable shell: the known dirs below still cover the engines
   }
+  const fromShell = parseEnv(stdout);
+  merge(fromShell ?? {});
+  // A busy launch can push the shell past 5s (seen on 2026-10-05: zsh still
+  // starting 3s in), and a missed read used to leave every chat that session
+  // without the user's variables. Keep waiting off the main thread; chats
+  // started after it lands get the full environment.
+  if (!fromShell) readLater();
+}
+
+function shell(): string {
+  return process.env.SHELL || "/bin/zsh";
+}
+
+function readLater(): void {
+  let stdout = "";
+  try {
+    const proc = spawn(shell(), READ_ENV, { timeout: 30_000, stdio: ["ignore", "pipe", "ignore"] });
+    proc.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+    proc.on("error", () => undefined);
+    proc.on("close", () => {
+      const fromShell = parseEnv(stdout);
+      if (fromShell) merge(fromShell);
+    });
+  } catch {
+    // no readable shell
+  }
+}
+
+// markers skip anything the shell's startup files print; no closing marker
+// means the shell never finished
+function parseEnv(stdout: string): Record<string, string> | undefined {
+  const block = new RegExp(`${MARK}(.*?)${MARK}`, "s").exec(stdout)?.[1];
+  if (block === undefined) return undefined;
+  const fromShell: Record<string, string> = {};
+  for (const entry of block.split("\0")) {
+    const eq = entry.indexOf("=");
+    if (eq > 0) fromShell[entry.slice(0, eq)] = entry.slice(eq + 1);
+  }
+  return fromShell;
+}
+
+function merge(fromShell: Record<string, string>): void {
   for (const [name, value] of Object.entries(fromShell)) {
     if (name === "PATH" || SHELL_OWN.has(name) || name in process.env) continue;
     process.env[name] = value;
