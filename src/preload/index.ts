@@ -5,6 +5,7 @@ import type { CodexCredits, CodexResets } from "../main/codexAccountUsage.ts";
 import type { Settings } from "../main/settings.ts";
 import type { CliStatus } from "../main/cliUpdates.ts";
 import type { Tools } from "../main/leanChats.ts";
+import type { Skill } from "../main/skills.ts";
 
 export interface PlanUsage {
   windows: UsageWindow[];
@@ -131,6 +132,9 @@ const api = {
     return () => ipcRenderer.removeListener("update:ready", listener);
   },
   refreshUsage: (): Promise<Record<string, PlanUsage>> => ipcRenderer.invoke("usage:refresh"),
+  // your skills with a one-line summary each (src/main/skills.ts)
+  listSkills: (): Promise<Skill[]> => ipcRenderer.invoke("skills:list"),
+  revealSkill: (file: string): Promise<void> => ipcRenderer.invoke("skills:reveal", file),
   effortDefaults: (): Promise<Record<string, string>> => ipcRenderer.invoke("effort:defaults"),
   // the open chat, and its side conversation when that tab shows
   setActiveChat: (id: string | null, sideId: string | null): Promise<void> =>

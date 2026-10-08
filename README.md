@@ -131,6 +131,15 @@ Codex's read-only account endpoint: percent used, the next reset, remaining
 credits, and available full resets. Usage refreshes on launch, every ten
 minutes, after a Codex turn, and when either view opens.
 
+## Skills
+
+The Skills view lists the skills you made, each with one sentence on what it
+does. Personal skills (in `~/.claude/skills`, `~/.agents/skills` and Codex's
+`skills` folder) come first, then each sidebar project's own `.claude/skills`
+and `.agents/skills`. A skill that only points at another is listed once, from
+the original, and skills that came with Codex or a plugin are left out. Click
+a skill for its full description and where it lives.
+
 ## Browser
 
 Claude and ChatGPT chats browse in a Chrome of their own, with its own profile
@@ -193,12 +202,14 @@ npm run test:limit-fallback # automatic continuation at usage limits and model c
 npm run test:auto-effort   # Auto effort
 npm run test:data-dir      # the data folder is private to you
 npm run test:cli-updates   # CLI version checks and updates
+npm run test:skills        # the Skills view's list and summaries
 npm run test:chat          # UI smoke tests, run in Electron
 npm run test:questions
 npm run test:projects
 npm run test:accounts-ui
 npm run test:browser-checks
 npm run test:settings
+npm run test:skills-ui
 npm run smoke              # engine layer against the real kimi CLI
 ```
 

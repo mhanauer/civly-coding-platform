@@ -45,12 +45,14 @@ npm run test:auto-effort
 npm run test:data-dir
 npm run test:code-map        # the code-map test's tools (scripts/code-map)
 npm run test:lean-chats
+npm run test:skills
 npm run test:chat            # UI tests: the real window with fixture data
 npm run test:questions
 npm run test:projects
 npm run test:accounts-ui
 npm run test:browser-checks
 npm run test:settings
+npm run test:skills-ui
 ```
 
 The UI tests run in Electron and need no CLI or login. `npm run smoke` talks to

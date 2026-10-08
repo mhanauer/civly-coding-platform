@@ -840,6 +840,94 @@ function UsageDashboard({
   );
 }
 
+type Skill = Awaited<ReturnType<typeof window.hub.listSkills>>[number];
+
+// Every skill you made, each with one plain sentence on what it does.
+// Personal skills work in every project; a project's own show under its name.
+function SkillsDialog({ onClose }: { onClose: () => void }): JSX.Element {
+  const [skills, setSkills] = useState<Skill[] | null>(null);
+  const [query, setQuery] = useState("");
+  // the skill showing its full description
+  const [open, setOpen] = useState("");
+  const load = useCallback((): void => {
+    void window.hub.listSkills().then(setSkills).catch(() => setSkills([]));
+  }, []);
+  useEffect(load, [load]);
+  const q = query.trim().toLowerCase();
+  const shown = (skills ?? []).filter(
+    (s) => !q || [s.name, s.description, s.project].some((t) => t.toLowerCase().includes(q))
+  );
+  const groups: Array<{ project: string; skills: Skill[] }> = [];
+  for (const s of shown) {
+    const group = groups.find((g) => g.project === s.project);
+    if (group) group.skills.push(s);
+    else groups.push({ project: s.project, skills: [s] });
+  }
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal skills-dash" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <span>Skills</span>
+          <span className="header-spacer" />
+          <button className="mini-btn" onClick={load}>
+            Refresh
+          </button>
+          <button className="mini-btn" onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <div className="plans-hint">
+          The skills in your personal skill folders work in every project; a project's own work only there.
+          Click one for its full description.
+        </div>
+        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search skills" />
+        {skills === null ? (
+          <div className="skills-empty">Reading your skill folders…</div>
+        ) : groups.length === 0 ? (
+          <div className="skills-empty">
+            {q ? "No skill matches that." : "No skills yet. A skill is a folder with a SKILL.md in ~/.claude/skills or a project's .claude/skills."}
+          </div>
+        ) : (
+          groups.map((g) => (
+            <section className="skills-group" key={g.project}>
+              <div className="skills-group-head">
+                {g.project || "All projects"} <span className="skills-count">{g.skills.length}</span>
+              </div>
+              {g.skills.map((s) => (
+                <div
+                  className={open === s.file ? "skill-row open" : "skill-row"}
+                  key={s.file}
+                  onClick={() => setOpen(open === s.file ? "" : s.file)}
+                >
+                  <div className="skill-name">{s.name}</div>
+                  {/* open, its full description starts the same way */}
+                  {open !== s.file || !s.description ? (
+                    <div className="skill-summary">{s.summary || "No description."}</div>
+                  ) : null}
+                  {open === s.file ? (
+                    <div className="skill-detail" onClick={(e) => e.stopPropagation()}>
+                      {s.description ? <div>{s.description}</div> : null}
+                      <div className="skill-file">
+                        <span>{s.file}</span>
+                        <button
+                          className="mini-btn"
+                          onClick={() => void window.hub.revealSkill(s.file)}
+                        >
+                          Show in Finder
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </section>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 // What the main process said about an answer. gone: nothing is waiting on
 // the request any more, so sending again cannot help.
 interface AnswerResult {
@@ -1977,6 +2065,7 @@ export default function App() {
   // files dropped on the side conversation go in its box, not the main one
   const dropOnSideRef = useRef<(paths: string[]) => void>(() => undefined);
   const [usageOpen, setUsageOpen] = useState(false);
+  const [skillsOpen, setSkillsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<Settings>({
     replyFilter: false,
@@ -3079,6 +3168,7 @@ export default function App() {
           onClose={() => setUsageOpen(false)}
         />
       ) : null}
+      {skillsOpen ? <SkillsDialog onClose={() => setSkillsOpen(false)} /> : null}
       {settingsOpen ? (
         <div className="modal-overlay" onClick={() => setSettingsOpen(false)}>
           <div className="modal settings-modal" onClick={(e) => e.stopPropagation()}>
@@ -3482,6 +3572,9 @@ export default function App() {
             }}
           >
             Usage
+          </button>
+          <button className="usage-btn" onClick={() => setSkillsOpen(true)}>
+            Skills
           </button>
         </div>
 

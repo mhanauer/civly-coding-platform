@@ -39,6 +39,7 @@ import {
 } from "./limitFallback.ts";
 import { allUsage, onUsageChange, recordLimitError, recordUsage, refreshCodex, refreshPlanUsage } from "./usage.ts";
 import { codexRoutingTimedOut } from "./codexRoutingRecovery.ts";
+import { listSkills, personalSkillDirs, projectSkillDirs } from "./skills.ts";
 import type { EngineEvent, EngineKind, PlanConfig, RunHandle } from "./engines/types.ts";
 
 app.setName("Civly Coding Platform");
@@ -1702,6 +1703,18 @@ ipcMain.handle("session:queue-send-now", async (_e, sessionId: string, index: nu
 });
 
 ipcMain.handle("usage:get", () => allUsage());
+
+// your skills: personal ones first, then each sidebar project's own
+ipcMain.handle("skills:list", () =>
+  listSkills([
+    { project: "", dirs: personalSkillDirs(homedir(), process.env.CODEX_HOME) },
+    ...allProjects().map((p) => ({ project: p.name, dirs: projectSkillDirs(p.path) }))
+  ])
+);
+
+ipcMain.handle("skills:reveal", (_e, file: string) => {
+  if (typeof file === "string" && basename(file) === "SKILL.md" && existsSync(file)) shell.showItemInFolder(file);
+});
 
 ipcMain.handle("browser:open", () => openBrowser());
 
