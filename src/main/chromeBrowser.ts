@@ -24,7 +24,7 @@ export const MCP_PACKAGE = "chrome-devtools-mcp@1.10.1";
 
 // Engines that take an MCP server on the command line
 export function usesBrowser(engine: EngineKind): boolean {
-  return engine === "claude" || engine === "codex";
+  return engine === "claude" || engine === "codex" || engine === "muse";
 }
 
 // Connects to the running browser on first use; never launches one itself.

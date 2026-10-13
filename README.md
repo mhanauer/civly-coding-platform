@@ -1,8 +1,8 @@
 # Civly Coding Platform
 
 A Mac desktop app that runs your AI coding subscriptions side by side: Claude
-Code, ChatGPT (Codex), Kimi, Gemini, and key-based plans such as Z.ai or
-OpenRouter. Each chat is bound to one plan, chats run in parallel, and
+Code, ChatGPT (Codex), Kimi, Gemini, Muse Code, and key-based plans such as
+Z.ai or OpenRouter. Each chat is bound to one plan, chats run in parallel, and
 switching one chat never touches another.
 
 Made by [Civly](https://civly.ai). MIT licensed.
@@ -11,8 +11,8 @@ Made by [Civly](https://civly.ai). MIT licensed.
 
 The app is an orchestrator, not an API client. It runs each vendor's official
 CLI headless (`claude -p --output-format stream-json`, `codex exec --json`,
-`kimi -p --output-format stream-json`) and shows the stream. Every login stays
-in its own CLI's credential store. The app never reads login tokens and never
+`kimi -p --output-format stream-json`, `muse exec --json`) and shows the
+stream. Every login stays in its own CLI's credential store. The app never reads login tokens and never
 makes its own API calls against a subscription quota.
 
 ## Install
@@ -69,6 +69,7 @@ the right command, or run it yourself:
 | ChatGPT | `codex` | `codex login` |
 | Kimi for Coding | `kimi` | run `kimi` and follow its login |
 | Gemini | `gemini` | run `gemini` and follow its login |
+| Muse Code (Meta) | `muse` | `muse login` |
 | Z.ai, OpenRouter, Meta Model API, other Anthropic-compatible keys | `claude` | Accounts → Add an account → An API key |
 
 A key plan runs through the Claude Code CLI with `ANTHROPIC_BASE_URL` and
@@ -76,8 +77,13 @@ A key plan runs through the Claude Code CLI with `ANTHROPIC_BASE_URL` and
 URL `https://api.meta.ai` and a model such as `muse-spark-1.3`; the app points
 Claude Code's subagent and background models at the chat's model and turns on
 MCP tool search for it. OpenRouter and Meta keys are pay-per-use, so a chat
-that hits a limit moves to them only after every subscription is out. The app shows a CLI's "not logged
-in" errors as the CLI wrote them.
+that hits a limit moves to them only after every subscription is out. The app
+shows a CLI's "not logged in" errors as the CLI wrote them.
+
+A Muse Code subscription works only through Meta's `muse` CLI, so it is an
+engine of its own rather than a key plan. Install it with
+`curl -fsSL https://dev.meta.ai/install.sh | sh`. Muse chats run with
+contributor mode off, so Meta does not train on them.
 
 Engines get your login shell's environment, read once when the app starts
 (`src/main/shellPath.ts`), so they run as they do from Terminal. After

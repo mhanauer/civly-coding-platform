@@ -7,6 +7,7 @@ import { claudeAdapter } from "./claude.ts";
 import { kimiAdapter } from "./kimi.ts";
 import { codexAdapter } from "./codex.ts";
 import { geminiAdapter } from "./gemini.ts";
+import { museAdapter } from "./muse.ts";
 import { withCodeMap } from "./codeMap.ts";
 
 // Adapters are factories so every run gets fresh parsing state (stream
@@ -15,7 +16,8 @@ export const ADAPTERS: Partial<Record<EngineKind, () => EngineAdapter>> = {
   claude: claudeAdapter,
   kimi: kimiAdapter,
   codex: codexAdapter,
-  gemini: geminiAdapter
+  gemini: geminiAdapter,
+  muse: museAdapter
 };
 
 // GUI-launched apps get a minimal PATH that does not include the user-level

@@ -1,4 +1,4 @@
-export type EngineKind = "claude" | "kimi" | "codex" | "gemini" | "opencode" | "qwen";
+export type EngineKind = "claude" | "kimi" | "codex" | "gemini" | "muse" | "opencode" | "qwen";
 
 export interface PlanConfig {
   id: string;

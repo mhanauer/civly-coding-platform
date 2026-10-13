@@ -678,7 +678,7 @@ ipcMain.handle(
     _e,
     opts: { label: string; engine: string; bin?: string; baseUrl?: string; token?: string; models?: string[]; ownLogin?: boolean }
   ) => {
-    const engines = ["claude", "kimi", "codex", "gemini", "opencode", "qwen"];
+    const engines = ["claude", "kimi", "codex", "gemini", "muse", "opencode", "qwen"];
     if (!opts || !engines.includes(opts.engine)) return { error: `Unknown engine "${opts?.engine}"` };
     const plans = addPlan({
       label: opts.label,
@@ -906,7 +906,8 @@ const ENGINE_LOGIN_ARGS: Record<string, string[]> = {
   codex: ["login"],
   kimi: [],
   opencode: ["auth", "login"],
-  gemini: []
+  gemini: [],
+  muse: ["login"]
 };
 
 const shellQuote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
@@ -1811,7 +1812,8 @@ function notifyBrowserChecks(): void {
 // work at it and housekeeping at medium (autoEffort.ts).
 const EFFORT_LEVELS: Record<string, string[]> = {
   claude: ["low", "medium", "high", "xhigh", "max"],
-  codex: ["low", "medium", "high", "xhigh", "max"]
+  codex: ["low", "medium", "high", "xhigh", "max"],
+  muse: ["low", "medium", "high", "xhigh", "max"]
 };
 
 function engineDefaultEffort(engine: string): string {

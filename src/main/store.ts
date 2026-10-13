@@ -35,6 +35,12 @@ export function engineLoggedIn(plan: PlanConfig): boolean {
       );
     case "gemini":
       return existsSync(join(home, ".gemini", "oauth_creds.json"));
+    // muse login or muse auth set; META_API_KEY in the shell works too
+    case "muse":
+      return (
+        existsSync(join(process.env.XDG_CONFIG_HOME || join(home, ".config"), "muse", "auth.json")) ||
+        Boolean(process.env.META_API_KEY)
+      );
     default:
       return false;
   }
@@ -118,6 +124,16 @@ const DEFAULT_PLANS: Array<Omit<PlanConfig, "installed">> = [
     color: "#4285f4",
     // Newest pro preview and the fast tier from the CLI's own model catalog.
     models: ["gemini-3.1-pro-preview", "gemini-3-flash-preview"]
+  },
+  {
+    id: "muse-code",
+    label: "Muse Code",
+    engine: "muse",
+    bin: "muse",
+    extraArgs: [],
+    color: "#0866ff",
+    // the CLI's default model, then the larger one; its catalog refreshes these
+    models: ["muse-wonder-1.0", "muse-wonder-full-1.0"]
   }
 ];
 
@@ -186,6 +202,7 @@ export function addPlan(entry: {
     codex: "codex",
     kimi: "kimi",
     gemini: "gemini",
+    muse: "muse",
     opencode: "opencode",
     qwen: "qwen"
   };
@@ -201,6 +218,7 @@ export function addPlan(entry: {
     codex: "ChatGPT account",
     kimi: "Kimi account",
     gemini: "Gemini account",
+    muse: "Muse Code account",
     opencode: "opencode account",
     qwen: "Qwen account"
   };

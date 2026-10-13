@@ -367,7 +367,8 @@ const STATUS_BADGE: Record<ChatStatus, string> = {
 
 const EFFORTS: Record<string, string[]> = {
   claude: ["auto", "low", "medium", "high", "xhigh", "max"],
-  codex: ["auto", "low", "medium", "high", "xhigh", "max"]
+  codex: ["auto", "low", "medium", "high", "xhigh", "max"],
+  muse: ["auto", "low", "medium", "high", "xhigh", "max"]
 };
 
 function effortsFor(engine: string): string[] {
@@ -3471,6 +3472,7 @@ export default function App() {
                   <option value="codex">ChatGPT (Codex)</option>
                   <option value="kimi">Kimi</option>
                   <option value="gemini">Gemini</option>
+                  <option value="muse">Muse Code (Meta)</option>
                   <option value="opencode">opencode</option>
                 </select>
               </label>

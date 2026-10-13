@@ -218,6 +218,31 @@ function geminiCatalog(): string[] {
   return ids;
 }
 
+// Muse Code caches Meta's model list in its data folder. Hidden rows are the
+// contributor variants (Meta trains on those chats) and non-chat models; the
+// default comes first, then the newest.
+export function museCatalog(dir = join(homedir(), ".local", "share", "muse", "model-catalog")): string[] {
+  if (!existsSync(dir)) return [];
+  const rows: Array<{ id: string; isDefault: boolean; date: number }> = [];
+  for (const f of readdirSync(dir).filter((name) => name.endsWith(".json"))) {
+    try {
+      const data = JSON.parse(readFileSync(join(dir, f), "utf8")) as {
+        rows?: Array<{ model_id?: string; visibility?: string; is_default?: boolean; release_date?: string; reasoning_effort_variants?: unknown }>;
+      };
+      for (const r of data.rows ?? []) {
+        if (!r.model_id || r.visibility !== "visible" || !Array.isArray(r.reasoning_effort_variants)) continue;
+        if (rows.some((x) => x.id === r.model_id)) continue;
+        rows.push({ id: r.model_id, isDefault: Boolean(r.is_default), date: Date.parse(r.release_date ?? "") || 0 });
+      }
+    } catch {
+      // try the next cache file
+    }
+  }
+  return rows
+    .sort((a, b) => Number(b.isDefault) - Number(a.isDefault) || b.date - a.date)
+    .map((r) => r.id);
+}
+
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const cache = new Map<string, { at: number; models: string[] }>();
 
@@ -237,6 +262,8 @@ export function discoverModels(plan: PlanConfig, defaults: string[]): string[] {
     found = pickModels(makeCandidates(codexCatalog(engineHome(plan) ?? ""), defaults), 3);
   } else if (plan.engine === "gemini") {
     found = pickModels(makeCandidates(geminiCatalog(), defaults));
+  } else if (plan.engine === "muse") {
+    found = museCatalog().slice(0, 2);
   } else if (plan.engine === "kimi") {
     const { models, defaultModel } = kimiCatalog();
     if (defaultModel && models.length > 0) {
