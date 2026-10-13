@@ -43,14 +43,33 @@ export function binaryExists(bin: string): boolean {
   return existsSync(resolved);
 }
 
+// Claude Code's model aliases: subagents, Plan mode, and background work
+// such as titles and summaries.
+const MODEL_ALIASES = [
+  "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+  "CLAUDE_CODE_SUBAGENT_MODEL"
+];
+
 // Claude Code caps output at 32k tokens for model names it does not know,
 // and GLM's reasoning counts against that cap. Z.ai serves GLM with a 128k
 // output limit (the same one ZCode uses), so its plans get the full room.
-function engineEnv(plan: PlanConfig): Record<string, string> {
+// Meta's Model API serves only Meta's models, so every alias goes to the
+// chat's model, and MCP tools need tool search, which Claude Code leaves off
+// for hosts other than Anthropic's.
+// exported for tests
+export function engineEnv(plan: PlanConfig, model?: string): Record<string, string> {
   const env = { ...(plan.env ?? {}) };
   const base = env.ANTHROPIC_BASE_URL ?? "";
   if (plan.engine === "claude" && /\bz\.ai\b|bigmodel\.cn/.test(base) && !env.CLAUDE_CODE_MAX_OUTPUT_TOKENS) {
     env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = "128000";
+  }
+  if (plan.engine === "claude" && /^https:\/\/api\.meta\.ai(?:[:/]|$)/.test(base)) {
+    const chosen =
+      model && model !== "default" ? model : plan.models?.find((m) => m !== "default") ?? "muse-spark-1.3";
+    for (const name of MODEL_ALIASES) env[name] ??= chosen;
+    env.ENABLE_TOOL_SEARCH ??= "true";
   }
   return env;
 }
@@ -129,7 +148,7 @@ function startEngine(
   const input = adapter.initialInput?.(sent);
   const proc = spawn(binPath, args, {
     cwd: opts.cwd,
-    env: { ...process.env, ...engineEnv(plan) },
+    env: { ...process.env, ...engineEnv(plan, opts.model) },
     stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"]
   });
   if (input !== undefined && proc.stdin) {

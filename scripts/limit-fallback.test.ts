@@ -78,6 +78,17 @@ test("an OpenRouter key is the last resort behind every subscription", () => {
   assert.equal(nextPlanAfterLimit(current, [current, openrouter, zai], new Set([current.id, "zai"]), store)?.id, "openrouter");
 });
 
+test("a Meta Model API key waits behind subscriptions too", () => {
+  const current = plan("claude-main", "claude");
+  const meta: PlanConfig = {
+    ...plan("meta", "claude", false),
+    env: { ANTHROPIC_AUTH_TOKEN: "meta-key", ANTHROPIC_BASE_URL: "https://api.meta.ai" }
+  };
+  const store = (p: PlanConfig): string => p.engine;
+  assert.equal(nextPlanAfterLimit(current, [current, meta, plan("chatgpt", "codex")], new Set([current.id]), store)?.id, "chatgpt");
+  assert.equal(nextPlanAfterLimit(current, [current, meta], new Set([current.id]), store)?.id, "meta");
+});
+
 test("a successful retry determines status without the previous limit error", () => {
   const events: EngineEvent[] = [
     { kind: "error", text: "weekly limit reached" },

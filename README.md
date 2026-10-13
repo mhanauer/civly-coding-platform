@@ -69,10 +69,14 @@ the right command, or run it yourself:
 | ChatGPT | `codex` | `codex login` |
 | Kimi for Coding | `kimi` | run `kimi` and follow its login |
 | Gemini | `gemini` | run `gemini` and follow its login |
-| Z.ai, OpenRouter, other Anthropic-compatible keys | `claude` | Accounts → Add an account → An API key |
+| Z.ai, OpenRouter, Meta Model API, other Anthropic-compatible keys | `claude` | Accounts → Add an account → An API key |
 
 A key plan runs through the Claude Code CLI with `ANTHROPIC_BASE_URL` and
-`ANTHROPIC_AUTH_TOKEN` set for that plan. The app shows a CLI's "not logged
+`ANTHROPIC_AUTH_TOKEN` set for that plan. For Meta's Model API, use the base
+URL `https://api.meta.ai` and a model such as `muse-spark-1.3`; the app points
+Claude Code's subagent and background models at the chat's model and turns on
+MCP tool search for it. OpenRouter and Meta keys are pay-per-use, so a chat
+that hits a limit moves to them only after every subscription is out. The app shows a CLI's "not logged
 in" errors as the CLI wrote them.
 
 Engines get your login shell's environment, read once when the app starts

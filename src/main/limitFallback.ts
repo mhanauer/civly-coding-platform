@@ -158,10 +158,11 @@ export function nextPlanAfterLimit(
       !unavailable.has(plan.id) &&
       (plan.loggedIn || Boolean(plan.env?.ANTHROPIC_AUTH_TOKEN || plan.env?.ANTHROPIC_API_KEY))
   );
-  // OpenRouter is pay-per-use, so subscriptions take over first and it stays
-  // the last resort even when it could resume the engine conversation.
+  // OpenRouter and Meta's Model API are pay-per-use, so subscriptions take
+  // over first and they stay the last resort even when they could resume the
+  // engine conversation.
   const payPerUse = (plan: PlanConfig): boolean =>
-    Boolean(plan.env?.ANTHROPIC_BASE_URL && /openrouter\.ai/.test(plan.env.ANTHROPIC_BASE_URL));
+    Boolean(plan.env?.ANTHROPIC_BASE_URL && /openrouter\.ai|api\.meta\.ai/.test(plan.env.ANTHROPIC_BASE_URL));
   const rank = (plan: PlanConfig): number => {
     const tier = conversationStore(plan) === store ? 0 : plan.engine === current.engine ? 1 : 2;
     return tier + (payPerUse(plan) ? 3 : 0);
