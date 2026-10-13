@@ -228,18 +228,27 @@ function shortDate(ms: number): string {
     : d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return `${n}`;
+}
+
 // One line for a plan's usage: out until a date, or its fullest window.
 function usageNote(u?: PlanUsage): string {
   if (!u) return "";
   if (u.limitedUntil !== undefined) return u.limitedUntil ? `out until ${shortDate(u.limitedUntil)}` : "out";
   const top = [...u.windows].sort((a, b) => b.usedPct - a.usedPct)[0];
-  if (!top) return "";
+  if (!top) {
+    const today = u.tokens?.[0];
+    return today ? `${formatTokens(today.input + today.output)} tokens today` : "";
+  }
   return top.usedPct === 0 && top.label.startsWith("$") ? top.label : `${top.usedPct}% ${top.label.toLowerCase()} used`;
 }
 
 // Each usage window as a bar with its reset time; red when the plan is out.
 function UsageBars({ usage, codex = false }: { usage?: PlanUsage; codex?: boolean }): JSX.Element | null {
-  if (!usage || (usage.windows.length === 0 && usage.limitedUntil === undefined && !usage.credits && !usage.resets)) return null;
+  if (!usage || (usage.windows.length === 0 && usage.limitedUntil === undefined && !usage.credits && !usage.resets && !usage.tokens?.length)) return null;
   return (
     <div className="usage-bars">
       {usage.limitedUntil !== undefined ? (
@@ -262,6 +271,14 @@ function UsageBars({ usage, codex = false }: { usage?: PlanUsage; codex?: boolea
             </>
           )}
           {w.resetsAt ? <span className="usage-bar-reset">resets {shortDate(w.resetsAt)}</span> : null}
+        </div>
+      ))}
+      {usage.tokens?.map((t) => (
+        <div className="usage-bar-row" key={t.label}>
+          <span className="usage-bar-label">{t.label}</span>
+          <span>
+            {formatTokens(t.input)} in · {formatTokens(t.output)} out
+          </span>
         </div>
       ))}
       {codex ? <CodexExtras usage={usage} /> : null}

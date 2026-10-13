@@ -11,6 +11,7 @@ export interface PlanUsage {
   windows: UsageWindow[];
   credits?: CodexCredits;
   resets?: CodexResets;
+  tokens?: Array<{ label: string; input: number; output: number }>;
   limitedUntil?: number;
   updatedAt: number;
 }

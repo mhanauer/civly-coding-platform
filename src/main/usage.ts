@@ -12,12 +12,14 @@ import {
   type CodexCredits,
   type CodexResets
 } from "./codexAccountUsage.ts";
+import { museSessionsRoot, readMuseTokenTally } from "./museUsage.ts";
 
 // How much of each plan is used, and when it resets. Sources, all read-only:
 // - Claude Max: the usage report Claude Code streams with every reply
 // - Z.ai: its quota endpoint, called with the plan's own API key
 // - OpenRouter: its key endpoint (spend against the key's limit)
 // - Codex: its read-only app-server account endpoint, or its latest session file
+// - Muse: token counts summed from its local session logs (no percent exists)
 // - any engine: a limit error's "resets at" time
 // Nothing here reads login tokens or spends quota.
 
@@ -25,6 +27,9 @@ export interface PlanUsage {
   windows: UsageWindow[];
   credits?: CodexCredits;
   resets?: CodexResets;
+  // token tally from the engine's own session logs (Muse), when no
+  // percent-of-plan window exists to show
+  tokens?: Array<{ label: string; input: number; output: number }>;
   // set when the plan is out; epoch ms, or 0 when the reset time is unknown
   limitedUntil?: number;
   updatedAt: number;
@@ -76,6 +81,7 @@ export function recordUsage(planId: string, windows: UsageWindow[], limited?: bo
   const out = limited ? Math.max(...windows.map((w) => (w.usedPct >= 100 ? w.resetsAt ?? 0 : 0)), 0) : undefined;
   usage[planId] = {
     windows: windows.length ? windows : prev?.windows ?? [],
+    tokens: prev?.tokens,
     limitedUntil: limited ? out || prev?.limitedUntil || 0 : undefined,
     updatedAt: Date.now()
   };
@@ -100,7 +106,7 @@ export function recordLimitError(planId: string, text: string): void {
   const prev = usage[planId];
   // A streamed usage event may already have given the exact reset time. A
   // later error with only a human-readable date must not erase it.
-  usage[planId] = { windows: prev?.windows ?? [], limitedUntil: until || prev?.limitedUntil || 0, updatedAt: Date.now() };
+  usage[planId] = { windows: prev?.windows ?? [], tokens: prev?.tokens, limitedUntil: until || prev?.limitedUntil || 0, updatedAt: Date.now() };
   save();
 }
 
@@ -238,6 +244,24 @@ function findRateLimits(obj: unknown): CodexRateLimits | null {
   return null;
 }
 
+// Muse publishes no percent-of-plan window; its session logs carry the
+// per-call token counts, so the tally is tokens spent, today and last 7 days.
+export function refreshMuse(plan: PlanConfig): void {
+  const tally = readMuseTokenTally(museSessionsRoot());
+  if (!tally) return;
+  const prev = usage[plan.id];
+  usage[plan.id] = {
+    windows: prev?.windows ?? [],
+    tokens: [
+      { label: "Today", input: tally.today.input, output: tally.today.output },
+      { label: "Last 7 days", input: tally.last7Days.input, output: tally.last7Days.output }
+    ],
+    limitedUntil: prev?.limitedUntil && prev.limitedUntil > Date.now() ? prev.limitedUntil : undefined,
+    updatedAt: Date.now()
+  };
+  save();
+}
+
 // Polls the plans that can be asked directly. Claude Max updates itself
 // from each reply; Codex uses its account endpoint with a session fallback.
 export async function refreshPlanUsage(plan: PlanConfig): Promise<void> {
@@ -246,6 +270,7 @@ export async function refreshPlanUsage(plan: PlanConfig): Promise<void> {
     if (plan.engine === "claude" && /api\.z\.ai/.test(base)) await refreshZai(plan);
     else if (plan.engine === "claude" && /openrouter\.ai/.test(base)) await refreshOpenRouter(plan);
     else if (plan.engine === "codex") await refreshCodex(plan);
+    else if (plan.engine === "muse") refreshMuse(plan);
   } catch {
     // offline or a rejected key: keep the last known numbers
   }
