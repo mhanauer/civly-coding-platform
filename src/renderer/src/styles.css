@@ -2229,6 +2229,53 @@ button.stop {
   width: min(820px, calc(100vw - 80px));
 }
 
+/* Muse /usage paste: the only way its subscription percent gets in */
+.muse-snapshot {
+  margin-top: 14px;
+  border-top: 1px solid #2e2352;
+  padding-top: 12px;
+}
+
+.muse-snapshot-head {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.muse-snapshot p {
+  font-size: 12.5px;
+  line-height: 1.5;
+  margin: 6px 0 8px;
+}
+
+.muse-snapshot textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+.muse-snapshot-fields {
+  display: flex;
+  gap: 12px;
+  align-items: end;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.muse-snapshot-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.muse-snapshot-fields input {
+  width: 110px;
+}
+
+.muse-snapshot-msg {
+  font-size: 12.5px;
+  margin-top: 8px;
+}
+
 .modal.skills-dash {
   width: min(720px, calc(100vw - 80px));
   max-height: min(82vh, 760px);

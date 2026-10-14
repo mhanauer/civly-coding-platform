@@ -228,6 +228,16 @@ function shortDate(ms: number): string {
     : d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
+// A window whose reset time has passed since the last check starts over at
+// zero; the saved number is from before the reset.
+function hasReset(w: { resetsAt?: number }): boolean {
+  return Boolean(w.resetsAt && w.resetsAt <= Date.now());
+}
+
+function currentPct(w: { usedPct: number; resetsAt?: number }): number {
+  return hasReset(w) ? 0 : w.usedPct;
+}
+
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
@@ -238,11 +248,12 @@ function formatTokens(n: number): string {
 function usageNote(u?: PlanUsage): string {
   if (!u) return "";
   if (u.limitedUntil !== undefined) return u.limitedUntil ? `out until ${shortDate(u.limitedUntil)}` : "out";
-  const top = [...u.windows].sort((a, b) => b.usedPct - a.usedPct)[0];
+  const top = u.windows.map((w) => ({ ...w, usedPct: currentPct(w) })).sort((a, b) => b.usedPct - a.usedPct)[0];
   if (!top) {
     const today = u.tokens?.[0];
     return today ? `${formatTokens(today.input + today.output)} tokens today` : "";
   }
+  if (top.displayLeft) return `${100 - top.usedPct}% left`;
   return top.usedPct === 0 && top.label.startsWith("$") ? top.label : `${top.usedPct}% ${top.label.toLowerCase()} used`;
 }
 
@@ -263,14 +274,18 @@ function UsageBars({ usage, codex = false }: { usage?: PlanUsage; codex?: boolea
             <>
               <span className="usage-bar">
                 <span
-                  className={w.usedPct >= 90 ? "usage-fill high" : w.usedPct >= 70 ? "usage-fill mid" : "usage-fill"}
-                  style={{ width: `${Math.min(100, w.usedPct)}%` }}
+                  className={currentPct(w) >= 90 ? "usage-fill high" : currentPct(w) >= 70 ? "usage-fill mid" : "usage-fill"}
+                  style={{ width: `${Math.min(100, w.displayLeft ? 100 - currentPct(w) : currentPct(w))}%` }}
                 />
               </span>
-              <span className="usage-bar-pct">{w.usedPct}% used</span>
+              <span className="usage-bar-pct">{w.displayLeft ? `${100 - currentPct(w)}% left` : `${currentPct(w)}% used`}</span>
             </>
           )}
-          {w.resetsAt ? <span className="usage-bar-reset">resets {shortDate(w.resetsAt)}</span> : null}
+          {w.resetsAt ? (
+            <span className="usage-bar-reset">
+              {hasReset(w) ? "reset since last check" : `resets ${shortDate(w.resetsAt)}`}
+            </span>
+          ) : null}
         </div>
       ))}
       {usage.tokens?.map((t) => (
@@ -764,24 +779,75 @@ function resetsIn(ms?: number): string {
 }
 
 function UsageCell({ window: w, out }: {
-  window?: { usedPct: number; resetsAt?: number };
+  window?: { usedPct: number; resetsAt?: number; displayLeft?: boolean };
   out: boolean;
 }): JSX.Element {
   if (!w) return <td className="usage-cell none">—</td>;
-  const pct = out ? 100 : w.usedPct;
+  const reset = hasReset(w);
+  const pct = out ? 100 : currentPct(w);
+  const shown = w.displayLeft ? 100 - pct : pct;
   return (
     <td className="usage-cell">
       <div className="usage-cell-top">
         <span className="usage-bar">
           <span
             className={pct >= 90 ? "usage-fill high" : pct >= 70 ? "usage-fill mid" : "usage-fill"}
-            style={{ width: `${Math.min(100, pct)}%` }}
+            style={{ width: `${Math.min(100, shown)}%` }}
           />
         </span>
-        <span className="usage-bar-pct">{pct}% used</span>
+        <span className="usage-bar-pct">{w.displayLeft ? `${shown}% left` : `${pct}% used`}</span>
       </div>
-      <div className="usage-cell-reset">{resetsIn(w.resetsAt)}</div>
+      <div className="usage-cell-reset">{reset && !out ? "reset since last check" : resetsIn(w.resetsAt)}</div>
     </td>
+  );
+}
+
+// "9:49 PM" today, "Thu 8:04 PM" earlier in the week, a date before that.
+function checkedAt(ms: number): string {
+  const time = new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (new Date(ms).toDateString() === new Date().toDateString()) return time;
+  if (Date.now() - ms < 6 * 86400000) return `${new Date(ms).toLocaleDateString([], { weekday: "short" })} ${time}`;
+  return new Date(ms).toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+// Muse's subscription percent exists only in its TUI's /usage, so it is
+// pasted here once and stored; the Muse row then shows "% left" like the
+// standalone viewer. Typed percents win over anything in the paste.
+function MuseSnapshotForm({ onSave }: { onSave: (input: { text?: string; windowUsedPct?: number; weeklyUsedPct?: number }) => Promise<string | undefined> }): JSX.Element {
+  const [text, setText] = useState("");
+  const [win, setWin] = useState("");
+  const [week, setWeek] = useState("");
+  const [msg, setMsg] = useState("");
+  const num = (v: string): number | undefined => (v.trim() === "" ? undefined : Number(v));
+  return (
+    <div className="muse-snapshot">
+      <div className="muse-snapshot-head">Muse — usage left</div>
+      <p>
+        In Muse, run <code>/usage</code> and paste what it shows. First percent is the current window, second is
+        weekly — or type the used percents yourself. Muse never writes this percent to a file, so pasting is the
+        only way in.
+      </p>
+      <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Paste /usage output here…" rows={3} />
+      <div className="muse-snapshot-fields">
+        <label>
+          Window used % <input value={win} onChange={(e) => setWin(e.target.value)} inputMode="decimal" placeholder="35" />
+        </label>
+        <label>
+          Weekly used % <input value={week} onChange={(e) => setWeek(e.target.value)} inputMode="decimal" placeholder="12" />
+        </label>
+        <button
+          className="mini-btn"
+          onClick={() =>
+            void onSave({ text, windowUsedPct: num(win), weeklyUsedPct: num(week) }).then((err) =>
+              setMsg(err ?? "Saved — the Muse row now shows % left.")
+            )
+          }
+        >
+          Save
+        </button>
+      </div>
+      {msg ? <div className="muse-snapshot-msg">{msg}</div> : null}
+    </div>
   );
 }
 
@@ -791,12 +857,14 @@ function UsageDashboard({
   plans,
   usage,
   onRefresh,
-  onClose
+  onClose,
+  onMuseSnapshot
 }: {
   plans: PlanConfig[];
   usage: Record<string, PlanUsage>;
   onRefresh: () => void;
   onClose: () => void;
+  onMuseSnapshot: (input: { text?: string; windowUsedPct?: number; weeklyUsedPct?: number }) => Promise<string | undefined>;
 }): JSX.Element {
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -822,10 +890,12 @@ function UsageDashboard({
           <tbody>
             {plans.map((p) => {
               const u = usage[p.id];
-              const hourly = u?.windows.find((w) => /hour/i.test(w.label));
+              const hourly = u?.windows.find((w) => /hour/i.test(w.label)) ?? u?.windows.find((w) => /window|minute/i.test(w.label));
               const weekly = u?.windows.find((w) => /week/i.test(w.label));
               const spend = u?.windows.find((w) => w.label.startsWith("$"));
               const out = u?.limitedUntil !== undefined;
+              const claudeSub = p.engine === "claude" && !p.env?.ANTHROPIC_BASE_URL;
+              const stale = u?.windows.some(hasReset);
               return (
                 <tr key={p.id}>
                   <td className="usage-plan-cell">
@@ -839,10 +909,10 @@ function UsageDashboard({
                         : spend
                           ? spend.label
                           : !u
-                            ? p.engine === "claude" && !p.env?.ANTHROPIC_BASE_URL
+                            ? claudeSub
                               ? "Fills in after its next reply"
                               : "No usage reported"
-                            : `Checked ${new Date(u.updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`}
+                            : `Checked ${checkedAt(u.updatedAt)}${stale && claudeSub ? ", updates after its next reply" : ""}`}
                     </div>
                     {p.engine === "codex" ? <CodexExtras usage={u} /> : null}
                   </td>
@@ -853,6 +923,7 @@ function UsageDashboard({
             })}
           </tbody>
         </table>
+        {plans.some((p) => p.engine === "muse") ? <MuseSnapshotForm onSave={onMuseSnapshot} /> : null}
       </div>
     </div>
   );
@@ -1401,7 +1472,7 @@ function Composer({
                 : [
                     "Switch plan, e.g. after hitting a limit",
                     ...(usage?.[planId]?.windows ?? []).map(
-                      (w) => `${w.label}: ${w.usedPct}%${w.resetsAt ? `, resets ${shortDate(w.resetsAt)}` : ""}`
+                      (w) => `${w.label}: ${currentPct(w)}%${w.resetsAt && !hasReset(w) ? `, resets ${shortDate(w.resetsAt)}` : ""}`
                     )
                   ].join("\n")
             }
@@ -3184,6 +3255,11 @@ export default function App() {
           usage={usage}
           onRefresh={() => void window.hub.refreshUsage().then((all) => setUsage({ ...all }))}
           onClose={() => setUsageOpen(false)}
+          onMuseSnapshot={async (input) => {
+            const res = await window.hub.setMuseSnapshot(input);
+            if (res.usage) setUsage({ ...res.usage });
+            return res.error;
+          }}
         />
       ) : null}
       {skillsOpen ? <SkillsDialog onClose={() => setSkillsOpen(false)} /> : null}

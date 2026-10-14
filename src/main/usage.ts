@@ -12,14 +12,20 @@ import {
   type CodexCredits,
   type CodexResets
 } from "./codexAccountUsage.ts";
-import { museSessionsRoot, readMuseTokenTally } from "./museUsage.ts";
+import {
+  museSessionsRoot,
+  museSnapshotWindows,
+  readMuseTokenTally,
+  type MuseSubscriptionSnapshot
+} from "./museUsage.ts";
 
 // How much of each plan is used, and when it resets. Sources, all read-only:
 // - Claude Max: the usage report Claude Code streams with every reply
 // - Z.ai: its quota endpoint, called with the plan's own API key
 // - OpenRouter: its key endpoint (spend against the key's limit)
 // - Codex: its read-only app-server account endpoint, or its latest session file
-// - Muse: token counts summed from its local session logs (no percent exists)
+// - Muse: token counts summed from its local session logs, plus the
+//   subscription percent from a stored /usage paste (its only source)
 // - any engine: a limit error's "resets at" time
 // Nothing here reads login tokens or spends quota.
 
@@ -244,19 +250,49 @@ function findRateLimits(obj: unknown): CodexRateLimits | null {
   return null;
 }
 
-// Muse publishes no percent-of-plan window; its session logs carry the
-// per-call token counts, so the tally is tokens spent, today and last 7 days.
+const MUSE_SNAPSHOT_FILE = join(DATA_DIR, "muse-usage-snapshot.json");
+
+// The stored /usage paste (see museUsage.ts). One Meta account backs every
+// Muse plan here, so one snapshot serves them all.
+export function loadMuseSubscriptionSnapshot(): MuseSubscriptionSnapshot | null {
+  try {
+    const snap = JSON.parse(readFileSync(MUSE_SNAPSHOT_FILE, "utf8")) as MuseSubscriptionSnapshot;
+    return snap && (snap.windowUsedPct !== undefined || snap.weeklyUsedPct !== undefined) ? snap : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveMuseSubscriptionSnapshot(snap: MuseSubscriptionSnapshot): void {
+  try {
+    writeFileSync(MUSE_SNAPSHOT_FILE, JSON.stringify(snap, null, 2));
+  } catch {
+    // usage is a convenience; a failed save never blocks a chat
+  }
+}
+
+// Muse publishes no percent-of-plan window of its own; its session logs
+// carry the per-call token counts, so the tally is tokens spent, today and
+// last 7 days. The percent windows come from the stored /usage snapshot
+// when the user has pasted one.
 export function refreshMuse(plan: PlanConfig): void {
   const tally = readMuseTokenTally(museSessionsRoot());
   if (!tally) return;
   const prev = usage[plan.id];
+  const snap = loadMuseSubscriptionSnapshot();
+  const windows = snap ? museSnapshotWindows(snap) : prev?.windows ?? [];
+  const full = windows.filter((w) => w.usedPct >= 100);
   usage[plan.id] = {
-    windows: prev?.windows ?? [],
+    windows,
     tokens: [
       { label: "Today", input: tally.today.input, output: tally.today.output },
       { label: "Last 7 days", input: tally.last7Days.input, output: tally.last7Days.output }
     ],
-    limitedUntil: prev?.limitedUntil && prev.limitedUntil > Date.now() ? prev.limitedUntil : undefined,
+    limitedUntil: full.length
+      ? Math.max(...full.map((w) => w.resetsAt ?? 0)) || prev?.limitedUntil || 0
+      : prev?.limitedUntil && prev.limitedUntil > Date.now()
+        ? prev.limitedUntil
+        : undefined,
     updatedAt: Date.now()
   };
   save();

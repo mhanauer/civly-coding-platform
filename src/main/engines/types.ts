@@ -79,6 +79,9 @@ export interface UsageWindow {
   usedPct: number;
   // epoch ms
   resetsAt?: number;
+  // show "100 - usedPct % left" instead of "% used" (Muse subscription
+  // snapshot windows; every other engine keeps the "% used" convention)
+  displayLeft?: boolean;
 }
 
 export interface ToolStep {

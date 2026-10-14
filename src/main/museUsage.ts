@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { UsageWindow } from "./engines/types.ts";
 
 export interface MuseTokens {
   input: number;
@@ -76,6 +77,85 @@ export function parseMuseSessionLog(text: string, now: number): MuseTokenTally {
     }
   }
   return { today, last7Days };
+}
+
+// Muse's subscription percent (SubscriptionUsageSnapshot: a short window
+// plus a weekly window, each a used_percent with a resets_at) is only ever
+// shown live in the Muse TUI's /usage. It is never written to a local file
+// and headless `muse exec --json` does not emit it, so the one source the
+// Platform can use is the user pasting /usage once. The snapshot below is
+// that paste, stored; windows derived from it are marked displayLeft so the
+// usage view shows "% left" instead of "% used".
+export interface MuseSubscriptionSnapshot {
+  windowUsedPct?: number;
+  weeklyUsedPct?: number;
+  // epoch ms
+  windowResetsAt?: number;
+  weeklyResetsAt?: number;
+  windowDurationMins?: number;
+  tier?: string;
+  savedAt: number;
+}
+
+export interface MuseSnapshotInput {
+  text?: string;
+  windowUsedPct?: number;
+  weeklyUsedPct?: number;
+  windowResetsAt?: number;
+  weeklyResetsAt?: number;
+  tier?: string;
+}
+
+function clampPct(n: number): number {
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+function pctField(v: number | undefined): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) ? clampPct(v) : undefined;
+}
+
+function msField(v: number | undefined): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : undefined;
+}
+
+// Pasted /usage text, best effort: the first percent is the current window,
+// the second is weekly; ISO reset stamps pair up in the same order. Typed
+// fields always win over anything the paste yielded. Null when no percent
+// can be found at all.
+export function resolveMuseSnapshot(input: MuseSnapshotInput, now = Date.now()): MuseSubscriptionSnapshot | null {
+  const text = input.text ?? "";
+  const pcts = [...text.matchAll(/(\d+(?:\.\d+)?)\s*%/g)].map((m) => Number(m[1]));
+  const stamps = [...text.matchAll(/(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?)/g)].map((m) =>
+    Date.parse(m[1].replace(" ", "T"))
+  );
+  const hours = /(\d+(?:\.\d+)?)\s*-?\s*hours?\b/i.exec(text);
+  const snap: MuseSubscriptionSnapshot = {
+    windowUsedPct: pctField(input.windowUsedPct) ?? (pcts[0] !== undefined ? clampPct(pcts[0]) : undefined),
+    weeklyUsedPct: pctField(input.weeklyUsedPct) ?? (pcts[1] !== undefined ? clampPct(pcts[1]) : undefined),
+    windowResetsAt: msField(input.windowResetsAt) ?? (Number.isFinite(stamps[0]) ? stamps[0] : undefined),
+    weeklyResetsAt: msField(input.weeklyResetsAt) ?? (Number.isFinite(stamps[1]) ? stamps[1] : undefined),
+    windowDurationMins: hours ? Math.round(Number(hours[1]) * 60) : undefined,
+    tier: input.tier?.trim() || undefined,
+    savedAt: now
+  };
+  return snap.windowUsedPct !== undefined || snap.weeklyUsedPct !== undefined ? snap : null;
+}
+
+export function museWindowLabel(durationMins?: number): string {
+  if (!durationMins) return "Current window";
+  if (durationMins % 60 === 0) return `${durationMins / 60}-hour`;
+  return `${durationMins}-minute`;
+}
+
+export function museSnapshotWindows(snap: MuseSubscriptionSnapshot): UsageWindow[] {
+  const windows: UsageWindow[] = [];
+  if (snap.windowUsedPct !== undefined) {
+    windows.push({ label: museWindowLabel(snap.windowDurationMins), usedPct: snap.windowUsedPct, resetsAt: snap.windowResetsAt, displayLeft: true });
+  }
+  if (snap.weeklyUsedPct !== undefined) {
+    windows.push({ label: "Weekly", usedPct: snap.weeklyUsedPct, resetsAt: snap.weeklyResetsAt, displayLeft: true });
+  }
+  return windows;
 }
 
 export function museSessionsRoot(): string {

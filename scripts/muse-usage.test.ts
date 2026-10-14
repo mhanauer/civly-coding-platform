@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseMuseSessionLog } from "../src/main/museUsage.ts";
+import { museSnapshotWindows, parseMuseSessionLog, resolveMuseSnapshot } from "../src/main/museUsage.ts";
 
 // recorded_at is microseconds since the epoch
 const at = (ms: number): number => ms * 1000;
@@ -51,6 +51,45 @@ test("Muse session log tally buckets by day, dedupes, and skips unreported recor
     today: { input: 1000, output: 50 },
     last7Days: { input: 3000, output: 150 }
   });
+});
+
+test("a pasted /usage snapshot resolves percents and reset times", () => {
+  const now = new Date(2026, 9, 13, 12, 0, 0).getTime();
+  const snap = resolveMuseSnapshot(
+    { text: "Current window: 35% used, resets 2026-10-13T17:30\nWeekly: 12% used, resets 2026-10-19T09:00" },
+    now
+  );
+  assert.equal(snap?.windowUsedPct, 35);
+  assert.equal(snap?.weeklyUsedPct, 12);
+  assert.equal(snap?.windowResetsAt, new Date("2026-10-13T17:30").getTime());
+  assert.equal(snap?.weeklyResetsAt, new Date("2026-10-19T09:00").getTime());
+});
+
+test("typed fields win over pasted text, and no percent means no snapshot", () => {
+  const now = new Date(2026, 9, 13, 12, 0, 0).getTime();
+  const snap = resolveMuseSnapshot({ text: "35% used, 12% used", windowUsedPct: 40 }, now);
+  assert.equal(snap?.windowUsedPct, 40);
+  assert.equal(snap?.weeklyUsedPct, 12);
+  assert.equal(resolveMuseSnapshot({ text: "no numbers here" }, now), null);
+  assert.equal(resolveMuseSnapshot({ windowUsedPct: 140 }, now)?.windowUsedPct, 100);
+});
+
+test("a snapshot becomes % left windows with reset times", () => {
+  const windows = museSnapshotWindows({
+    windowUsedPct: 35,
+    weeklyUsedPct: 12,
+    windowResetsAt: 111,
+    weeklyResetsAt: 222,
+    windowDurationMins: 300,
+    savedAt: 1
+  });
+  assert.deepEqual(windows, [
+    { label: "5-hour", usedPct: 35, resetsAt: 111, displayLeft: true },
+    { label: "Weekly", usedPct: 12, resetsAt: 222, displayLeft: true }
+  ]);
+  assert.deepEqual(museSnapshotWindows({ windowUsedPct: 20, savedAt: 1 }), [
+    { label: "Current window", usedPct: 20, resetsAt: undefined, displayLeft: true }
+  ]);
 });
 
 test("an empty or odd log tallies to zero", () => {

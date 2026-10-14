@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { EngineEvent, PlanConfig, UsageWindow } from "../main/engines/types.ts";
 import type { BrowserCheck } from "../main/browserChecks.ts";
 import type { CodexCredits, CodexResets } from "../main/codexAccountUsage.ts";
+import type { MuseSnapshotInput } from "../main/museUsage.ts";
 import type { Settings } from "../main/settings.ts";
 import type { CliStatus } from "../main/cliUpdates.ts";
 import type { Tools } from "../main/leanChats.ts";
@@ -133,6 +134,9 @@ const api = {
     return () => ipcRenderer.removeListener("update:ready", listener);
   },
   refreshUsage: (): Promise<Record<string, PlanUsage>> => ipcRenderer.invoke("usage:refresh"),
+  // paste of Muse's /usage (or typed percents) -> stored subscription snapshot
+  setMuseSnapshot: (input: MuseSnapshotInput): Promise<{ error?: string; usage?: Record<string, PlanUsage> }> =>
+    ipcRenderer.invoke("usage:muse-snapshot", input),
   // your skills with a one-line summary each (src/main/skills.ts)
   listSkills: (): Promise<Skill[]> => ipcRenderer.invoke("skills:list"),
   revealSkill: (file: string): Promise<void> => ipcRenderer.invoke("skills:reveal", file),
