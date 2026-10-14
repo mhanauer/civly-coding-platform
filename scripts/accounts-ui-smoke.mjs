@@ -19,7 +19,7 @@ let plans = [
 ];
 const usage = {
   "chatgpt-main": {
-    windows: [{ label: "Weekly", usedPct: 90, resetsAt: 1791104086000 }],
+    windows: [{ label: "Weekly", usedPct: 90, resetsAt: Date.now() + 3 * 86400000 }],
     credits: { balance: 62500, unlimited: false },
     resets: {
       availableCount: 2,
@@ -29,6 +29,14 @@ const usage = {
       ]
     },
     updatedAt: Date.now()
+  },
+  // last checked four days ago; both windows have reset since
+  "claude-work-1": {
+    windows: [
+      { label: "5-hour", usedPct: 100, resetsAt: Date.now() - 4 * 86400000 + 3600000 },
+      { label: "Weekly", usedPct: 98, resetsAt: Date.now() - 3 * 86400000 }
+    ],
+    updatedAt: Date.now() - 4 * 86400000
   }
 };
 const created = [];
@@ -212,6 +220,13 @@ app.whenReady().then(async () => {
       assert.match(text, /90% used/);
       assert.match(text, /Credits: 62,500 remaining/);
       assert.match(text, /Resets: 2 available/);
+    });
+
+    await check("a plan whose windows reset since its last check shows them as reset", async () => {
+      const text = await evaluate("Array.from(document.querySelectorAll('.usage-dash tr')).find(r => r.innerText.includes('Claude Max (work)')).innerText");
+      assert.doesNotMatch(text, /resetting now|100% used|98% used/);
+      assert.match(text, /reset since last check/);
+      assert.match(text, /updates after its next reply/);
     });
   } catch (err) {
     results.push(`FAIL setup: ${err.message}`);
