@@ -823,9 +823,9 @@ function MuseSnapshotForm({ onSave }: { onSave: (input: { text?: string; windowU
     <div className="muse-snapshot">
       <div className="muse-snapshot-head">Muse — usage left</div>
       <p>
-        In Muse, run <code>/usage</code> and paste what it shows. First percent is the current window, second is
-        weekly — or type the used percents yourself. Muse never writes this percent to a file, so pasting is the
-        only way in.
+        This fills itself in: Refresh reads Muse's own <code>/usage</code> panel, the only place its percent
+        exists. If the Muse row ever stays empty, run <code>/usage</code> in Muse, paste what it shows (first
+        percent is the current window, second is weekly), or type the used percents yourself.
       </p>
       <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Paste /usage output here…" rows={3} />
       <div className="muse-snapshot-fields">

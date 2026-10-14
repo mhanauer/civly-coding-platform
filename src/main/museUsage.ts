@@ -82,10 +82,11 @@ export function parseMuseSessionLog(text: string, now: number): MuseTokenTally {
 // Muse's subscription percent (SubscriptionUsageSnapshot: a short window
 // plus a weekly window, each a used_percent with a resets_at) is only ever
 // shown live in the Muse TUI's /usage. It is never written to a local file
-// and headless `muse exec --json` does not emit it, so the one source the
-// Platform can use is the user pasting /usage once. The snapshot below is
-// that paste, stored; windows derived from it are marked displayLeft so the
-// usage view shows "% left" instead of "% used".
+// and headless `muse exec --json` does not emit it, so the Platform reads
+// that panel by opening the TUI (usage.ts) and keeps the result as the
+// snapshot below; pasting /usage by hand is the fallback. Windows derived
+// from it are marked displayLeft so the usage view shows "% left" instead
+// of "% used".
 export interface MuseSubscriptionSnapshot {
   windowUsedPct?: number;
   weeklyUsedPct?: number;
@@ -139,6 +140,60 @@ export function resolveMuseSnapshot(input: MuseSnapshotInput, now = Date.now()):
     savedAt: now
   };
   return snap.windowUsedPct !== undefined || snap.weeklyUsedPct !== undefined ? snap : null;
+}
+
+const MONTHS: Record<string, number> = {
+  Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11
+};
+
+function timeToday(time: string, now: number): number | undefined {
+  const m = /(\d{1,2}):(\d{2})\s*([AP]M)/i.exec(time);
+  if (!m) return undefined;
+  let h = Number(m[1]) % 12;
+  if (/pm/i.test(m[3])) h += 12;
+  const d = new Date(now);
+  d.setHours(h, Number(m[2]), 0, 0);
+  // a same-day time already past at scrape time belongs to the next window
+  if (d.getTime() <= now) d.setDate(d.getDate() + 1);
+  return d.getTime();
+}
+
+function monthDayTime(text: string, now: number): number | undefined {
+  const m = /([A-Z][a-z]{2})\s+(\d{1,2})\s+at\s+(\d{1,2}):(\d{2})\s*([AP]M)/i.exec(text);
+  if (!m || MONTHS[m[1]] === undefined) return undefined;
+  let h = Number(m[3]) % 12;
+  if (/pm/i.test(m[5])) h += 12;
+  const base = new Date(now);
+  const d = new Date(base.getFullYear(), MONTHS[m[1]], Number(m[2]), h, Number(m[4]));
+  if (d.getTime() <= now) d.setFullYear(d.getFullYear() + 1);
+  return d.getTime();
+}
+
+// The TUI's /usage panel, ANSI and box borders included, e.g.:
+//   Subscription · Muse Code Max Usage
+//     Current        0% used · Resets at 12:39 PM
+//     Weekly         37% used · Resets Oct 18 at 8:00 PM
+export function parseMuseUsagePanel(text: string, now = Date.now()): MuseSubscriptionSnapshot | null {
+  const clean = text
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b[()][0-9A-B]/g, "")
+    .replace(/\x1b./g, "")
+    .replace(/[│┃]/g, " ")
+    .replace(/[└┌┐┘├┤]/g, " ")
+    .replace(/─+/g, " ");
+  const tier = /Subscription\s*·\s*(.+?)(?=\s+(?:Current|Weekly)\s|$)/.exec(clean)?.[1]?.replace(/\s+/g, " ").trim() || undefined;
+  const current = /Current\s+(\d+(?:\.\d+)?)%\s*used\s*·\s*Resets\s+at\s+([0-9:]+\s*[AP]M)/i.exec(clean);
+  const weekly = /Weekly\s+(\d+(?:\.\d+)?)%\s*used\s*·\s*Resets\s+([A-Z][a-z]{2}\s+\d{1,2}\s+at\s+[0-9:]+\s*[AP]M)/i.exec(clean);
+  if (!current && !weekly) return null;
+  return {
+    windowUsedPct: current ? clampPct(Number(current[1])) : undefined,
+    weeklyUsedPct: weekly ? clampPct(Number(weekly[1])) : undefined,
+    windowResetsAt: current ? timeToday(current[2], now) : undefined,
+    weeklyResetsAt: weekly ? monthDayTime(weekly[2], now) : undefined,
+    tier,
+    savedAt: now
+  };
 }
 
 export function museWindowLabel(durationMins?: number): string {

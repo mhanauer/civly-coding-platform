@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { museSnapshotWindows, parseMuseSessionLog, resolveMuseSnapshot } from "../src/main/museUsage.ts";
+import { museSnapshotWindows, parseMuseSessionLog, parseMuseUsagePanel, resolveMuseSnapshot } from "../src/main/museUsage.ts";
 
 // recorded_at is microseconds since the epoch
 const at = (ms: number): number => ms * 1000;
@@ -90,6 +90,23 @@ test("a snapshot becomes % left windows with reset times", () => {
   assert.deepEqual(museSnapshotWindows({ windowUsedPct: 20, savedAt: 1 }), [
     { label: "Current window", usedPct: 20, resetsAt: undefined, displayLeft: true }
   ]);
+});
+
+test("the TUI /usage panel parses to a snapshot with reset times", () => {
+  const now = new Date(2026, 9, 13, 7, 41, 0).getTime();
+  const panel = [
+    "  Subscription · Muse Code Max Usage",
+    "    Current        0% used · Resets at 12:39 PM",
+    "    Weekly         37% used · Resets Oct 18 at 8:00 PM",
+    "    as of 7:41 AM"
+  ].join("\n");
+  const snap = parseMuseUsagePanel(panel, now);
+  assert.equal(snap?.windowUsedPct, 0);
+  assert.equal(snap?.weeklyUsedPct, 37);
+  assert.equal(snap?.tier, "Muse Code Max Usage");
+  assert.equal(snap?.windowResetsAt, new Date(2026, 9, 13, 12, 39).getTime());
+  assert.equal(snap?.weeklyResetsAt, new Date(2026, 9, 18, 20, 0).getTime());
+  assert.equal(parseMuseUsagePanel("nothing useful", now), null);
 });
 
 test("an empty or odd log tallies to zero", () => {

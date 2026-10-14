@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +16,7 @@ import {
 import {
   museSessionsRoot,
   museSnapshotWindows,
+  parseMuseUsagePanel,
   readMuseTokenTally,
   type MuseSubscriptionSnapshot
 } from "./museUsage.ts";
@@ -271,15 +273,101 @@ export function saveMuseSubscriptionSnapshot(snap: MuseSubscriptionSnapshot): vo
   }
 }
 
+let museScrape: Promise<MuseSubscriptionSnapshot | null> | null = null;
+
+// Muse publishes its subscription percent only on the TUI's /usage panel,
+// so reading it means opening that panel. Node has no pty of its own and
+// BSD `script` refuses a piped stdin, so a short python3 pty script (stdlib
+// only) runs the TUI, types /usage, and prints the raw screen back for
+// parseMuseUsagePanel. Read-only — /usage makes no model call. Any failure
+// (no python3, slow start, odd output) leaves the stored snapshot in place.
+const MUSE_USAGE_PTY = [
+  "import os,pty,select,time,fcntl,termios,struct,sys",
+  "bin=sys.argv[1]",
+  "pid,fd=pty.fork()",
+  "if pid==0:",
+  " os.environ['TERM']='xterm-256color'",
+  " os.execvp(bin,[bin,'--trust-workspace'])",
+  "fcntl.ioctl(fd,termios.TIOCSWINSZ,struct.pack('HHHH',40,120,0,0))",
+  "buf=b'';stage=0;typed=0.0;end=time.time()+40",
+  "while time.time()<end:",
+  " r,_,_=select.select([fd],[],[],0.3)",
+  " if fd in r:",
+  "  try:c=os.read(fd,65536)",
+  "  except OSError:break",
+  "  if not c:break",
+  "  buf+=c",
+  " if stage==0 and '\\u276f'.encode() in buf:",
+  "  time.sleep(0.8);os.write(fd,b'/usage');stage=1;typed=time.time()",
+  " elif stage==1 and time.time()-typed>1.5:",
+  "  os.write(fd,b'\\r');stage=2",
+  " if stage==2 and b'Subscription' in buf and b'% used' in buf:",
+  "   time.sleep(0.7)",
+  "   try:os.read(fd,65536)",
+  "   except OSError:pass",
+  "   break",
+  "try:os.kill(pid,9)",
+  "except Exception:pass",
+  "sys.stdout.buffer.write(buf)"
+].join("\n");
+
+export function fetchMuseSubscriptionSnapshot(bin: string): Promise<MuseSubscriptionSnapshot | null> {
+  if (process.platform !== "darwin") return Promise.resolve(null);
+  if (museScrape) return museScrape;
+  museScrape = new Promise((resolve) => {
+    let proc: ReturnType<typeof spawn>;
+    try {
+      proc = spawn("python3", ["-c", MUSE_USAGE_PTY, bin], {
+        cwd: homedir(),
+        env: { ...process.env, TERM: "xterm-256color" },
+        stdio: ["ignore", "pipe", "ignore"]
+      });
+    } catch {
+      museScrape = null;
+      resolve(null);
+      return;
+    }
+    let out = "";
+    let settled = false;
+    const done = (snap: MuseSubscriptionSnapshot | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      museScrape = null;
+      try {
+        proc.kill("SIGKILL");
+      } catch {
+        // already gone
+      }
+      resolve(snap);
+    };
+    const timeout = setTimeout(() => done(parseMuseUsagePanel(out)), 50_000);
+    proc.on("error", () => done(null));
+    proc.on("close", () => done(parseMuseUsagePanel(out)));
+    proc.stdout?.on("data", (chunk: Buffer) => {
+      out += chunk.toString();
+    });
+  });
+  return museScrape;
+}
+
 // Muse publishes no percent-of-plan window of its own; its session logs
 // carry the per-call token counts, so the tally is tokens spent, today and
-// last 7 days. The percent windows come from the stored /usage snapshot
-// when the user has pasted one.
-export function refreshMuse(plan: PlanConfig): void {
+// last 7 days. The percent windows come from its /usage panel: fetched live
+// when the stored snapshot is missing or older than ten minutes, pasted by
+// hand (usage:muse-snapshot) only when the fetch cannot run.
+export async function refreshMuse(plan: PlanConfig): Promise<void> {
   const tally = readMuseTokenTally(museSessionsRoot());
   if (!tally) return;
   const prev = usage[plan.id];
-  const snap = loadMuseSubscriptionSnapshot();
+  let snap = loadMuseSubscriptionSnapshot();
+  if (!snap || Date.now() - snap.savedAt > 10 * 60_000) {
+    const fresh = await fetchMuseSubscriptionSnapshot(resolveBin(plan.bin));
+    if (fresh) {
+      snap = fresh;
+      saveMuseSubscriptionSnapshot(fresh);
+    }
+  }
   const windows = snap ? museSnapshotWindows(snap) : prev?.windows ?? [];
   const full = windows.filter((w) => w.usedPct >= 100);
   usage[plan.id] = {
@@ -306,7 +394,7 @@ export async function refreshPlanUsage(plan: PlanConfig): Promise<void> {
     if (plan.engine === "claude" && /api\.z\.ai/.test(base)) await refreshZai(plan);
     else if (plan.engine === "claude" && /openrouter\.ai/.test(base)) await refreshOpenRouter(plan);
     else if (plan.engine === "codex") await refreshCodex(plan);
-    else if (plan.engine === "muse") refreshMuse(plan);
+    else if (plan.engine === "muse") await refreshMuse(plan);
   } catch {
     // offline or a rejected key: keep the last known numbers
   }
