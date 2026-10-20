@@ -27,6 +27,7 @@ const handlers = {
   "session:list": () => [session], "session:transcript": () => [{ kind: "user", text: "Search the county courts" }],
   "ui:active-chat": () => undefined, "update:status": () => ({ ready: false, waiting: false }),
   "browser:checks": () => [],
+  "remote:macs": () => [],
   "settings:get": () => ({ replyFilter: false, devBranch: false, zcodeProjects: false }),
   "browser:show-check": (_event, targetId) => {
     shown.push(targetId);

@@ -205,6 +205,29 @@ body.resizing iframe {
   font-size: 13px;
 }
 
+.remote-settings {
+  border-top: 1px solid rgba(201, 186, 240, 0.18);
+  padding-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 12.5px;
+}
+
+.remote-settings > strong { color: #efecf8; font-size: 14px; }
+.remote-settings p { margin: 0; color: #9d8fc9; line-height: 1.5; }
+.remote-add-row { display: flex; gap: 6px; }
+.remote-add-row input { min-width: 0; flex: 1; }
+.remote-mac-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #efecf8; }
+.remote-mac-row small { color: #9d8fc9; font-size: 11px; }
+.run-on-row { display: flex; flex-direction: column; gap: 4px; padding: 0 10px 8px; color: #9d8fc9; font-size: 11px; }
+.run-on-row select { width: 100%; }
+.welcome-run-on { width: 220px; padding: 8px 0 0; }
+.chat-menu-label { padding: 8px 9px 3px; color: #9d8fc9; font-size: 11px; border-top: 1px solid #3a2c63; }
+.chat-menu button:disabled { opacity: 0.5; cursor: default; }
+.host-chip { flex: none; padding: 3px 7px; border: 1px solid #3a2c63; border-radius: 6px; color: #c9baf0; font-size: 11px; }
+.remote-note { padding: 7px 15px; border-bottom: 1px solid #2e2352; color: #9d8fc9; font-size: 11.5px; line-height: 1.4; }
+
 .cli-versions {
   display: flex;
   flex-direction: column;

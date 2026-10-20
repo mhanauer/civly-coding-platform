@@ -48,6 +48,12 @@ export interface SessionSummary {
   // the chat a side conversation belongs to; "" is the new-task screen
   parentId?: string;
   createdAt: number;
+  updatedAt: number;
+  hostId?: string;
+  hostLabel?: string;
+  hostOnline?: boolean;
+  hostMissing?: boolean;
+  transferredTo?: string;
 }
 
 export interface SessionPatch {
@@ -89,11 +95,28 @@ const api = {
     tools?: Tools;
     side?: boolean;
     parentId?: string;
+    hostId?: string;
   }): Promise<{ sessionId?: string; error?: string }> =>
     ipcRenderer.invoke("session:create", opts),
   setSideParent: (sessionId: string, parentId: string): Promise<{ error?: string }> =>
     ipcRenderer.invoke("session:set-parent", sessionId, parentId),
   listSessions: (): Promise<SessionSummary[]> => ipcRenderer.invoke("session:list"),
+  remoteMacs: (): Promise<Array<{ id: string; label: string; sshHost: string; online: boolean; plans: PlanConfig[] }>> => ipcRenderer.invoke("remote:macs"),
+  addRemoteMac: (label: string, sshHost: string): Promise<{ mac?: { id: string; label: string; sshHost: string }; error?: string }> =>
+    ipcRenderer.invoke("remote:add", label, sshHost),
+  removeRemoteMac: (id: string): Promise<void> => ipcRenderer.invoke("remote:remove", id),
+  continueOnMac: (sessionId: string, destinationId: string): Promise<{ sessionId?: string; error?: string }> =>
+    ipcRenderer.invoke("remote:continue", sessionId, destinationId),
+  onRemoteHostsChanged: (cb: () => void): (() => void) => {
+    const listener = (): void => cb();
+    ipcRenderer.on("remote:hosts-changed", listener);
+    return () => ipcRenderer.removeListener("remote:hosts-changed", listener);
+  },
+  onSessionSnapshot: (cb: (payload: { sessionId: string; offset: number; events: EngineEvent[] }) => void): (() => void) => {
+    const listener = (_e: unknown, payload: { sessionId: string; offset: number; events: EngineEvent[] }): void => cb(payload);
+    ipcRenderer.on("session:snapshot", listener);
+    return () => ipcRenderer.removeListener("session:snapshot", listener);
+  },
   updateSession: (
     sessionId: string,
     patch: SessionPatch
@@ -165,7 +188,7 @@ const api = {
   steer: (sessionId: string, prompt: string): Promise<{ error?: string }> =>
     ipcRenderer.invoke("session:steer", sessionId, prompt),
   cancel: (sessionId: string): Promise<void> => ipcRenderer.invoke("session:cancel", sessionId),
-  deleteChat: (sessionId: string): Promise<void> => ipcRenderer.invoke("chats:delete", sessionId),
+  deleteChat: (sessionId: string): Promise<{ error?: string }> => ipcRenderer.invoke("chats:delete", sessionId),
   listProjects: (): Promise<Array<{ path: string; name: string }>> =>
     ipcRenderer.invoke("projects:list"),
   addProject: (): Promise<{ projects: Array<{ path: string; name: string }> }> =>

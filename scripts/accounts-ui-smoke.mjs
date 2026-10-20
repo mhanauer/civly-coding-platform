@@ -69,6 +69,7 @@ const handlers = {
   "session:list": () => [], "ui:active-chat": () => undefined,
   "update:status": () => ({ ready: false, waiting: false }),
   "browser:checks": () => [],
+  "remote:macs": () => [],
   "settings:get": () => ({ replyFilter: false, devBranch: false, zcodeProjects: false })
 };
 for (const [channel, handler] of Object.entries(handlers)) ipcMain.handle(channel, handler);

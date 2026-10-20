@@ -41,6 +41,7 @@ const handlers = {
   "session:list": () => [], "session:transcript": () => [],
   "ui:active-chat": () => undefined, "update:status": () => ({ ready: false, waiting: false }),
   "browser:checks": () => [],
+  "remote:macs": () => [],
   "settings:get": () => ({ replyFilter: false, devBranch: false, zcodeProjects: false, leanChats: false, updateClis: false }),
   "clis:status": () => [],
   "skills:list": () => {

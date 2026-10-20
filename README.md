@@ -36,6 +36,40 @@ shasum -a 256 -c Civly-Coding-Platform-<version>-arm64.dmg.sha256
 To update, install the newer DMG the same way. The running app notices and
 offers to restart once no chat is working.
 
+## Run chats on a Mac mini or Mac Studio
+
+Install the same Platform release on both Macs. On the Mac that will run the
+chats, open the app and turn on **Settings → Remote Macs → Accept remote chats
+on this Mac**. Keep the app running. Closing its window on macOS leaves the
+app running; quitting it stops remote access. If the host reboots, launch the
+app again after signing in.
+
+Enable macOS Remote Login on the host and set up key-based SSH from the
+MacBook. Connect once in Terminal so its host key is trusted. In the MacBook
+app, open **Settings → Remote Macs**, enter a name such as `Mac Studio` and
+the SSH host alias such as `mac-studio`, then click **Pair**. The app connects
+through SSH to a socket available only to that Mac account. It opens no
+public port and does not copy CLI login tokens.
+
+Use **New chats run on** in the sidebar or **Run on** on the new-task screen
+before starting a chat. The remote Mac needs the selected CLI and its own
+sign-in, plus the project at the same absolute path and Git commit as on the
+MacBook. Both checkouts must be clean when starting a remote chat. The host
+runs the CLI and keeps the chat record. The MacBook displays a cached copy
+and reconnects after sleep, network loss, or app restart. Output produced
+while it was disconnected appears when it reconnects. A host app restart
+during a turn stops that turn and asks you to check the project before
+continuing, so a command is not run twice automatically.
+
+Use the chat menu's **Continue on another Mac** choice after a turn. The app
+waits for a running turn, checks both project revisions and attached files,
+and creates a new chat on the destination with the prior transcript. The
+next message starts a new CLI session with a recap. The old record stays on
+its original Mac. Commit or move local changes yourself before continuing;
+the app does not sync project files. Browser sign-ins and checks need the
+Platform window on the host. Terminal and browser side tabs stay on the
+local Mac and are unavailable in a remote chat.
+
 ## Build from source
 
 You need Node.js 24 and npm.

@@ -87,6 +87,12 @@ for attempt in 1 2 3 4 5; do
 done
 security list-keychains -d user -s "${KEYCHAINS[@]}"
 
+if [ "${1:-}" = "--stage-only" ]; then
+  codesign --verify --deep --strict "$APP"
+  echo "Staged: $APP"
+  exit 0
+fi
+
 # keep the launchable copy in /Applications current
 rm -rf "/Applications/${APP_NAME}.app"
 ditto --norsrc --noextattr "$APP" "/Applications/${APP_NAME}.app"

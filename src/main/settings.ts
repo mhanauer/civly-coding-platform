@@ -17,10 +17,13 @@ export interface Settings {
   leanChats: boolean;
   // the engine CLIs update to their latest release on their own (cliUpdates.ts)
   updateClis: boolean;
+  // Allow the same macOS account to reach this app's private chat socket
+  // through an authenticated SSH connection. Off until explicitly enabled.
+  acceptRemoteChats: boolean;
 }
 
 const FILE = join(DATA_DIR, "settings.json");
-const DEFAULTS: Settings = { replyFilter: false, devBranch: false, zcodeProjects: false, leanChats: false, updateClis: false };
+const DEFAULTS: Settings = { replyFilter: false, devBranch: false, zcodeProjects: false, leanChats: false, updateClis: false, acceptRemoteChats: false };
 const KEYS = Object.keys(DEFAULTS) as Array<keyof Settings>;
 
 export function loadSettings(): Settings {

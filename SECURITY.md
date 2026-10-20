@@ -33,3 +33,8 @@ welcome.
   own sandbox settings.
 - **The plain-English filter**, when turned on in Settings, sends flagged
   replies to Z.ai to be rewritten. It is off by default.
+- **Remote Macs** are off until the host enables them in Settings. The host
+  accepts requests only through a socket limited to its macOS account. The
+  MacBook reaches that socket through SSH with a trusted host key. It keeps
+  a local copy of remote chat transcripts for reconnecting. Plan API keys
+  and CLI login tokens stay on the host.

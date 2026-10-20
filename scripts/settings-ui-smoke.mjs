@@ -22,7 +22,7 @@ const session = {
   fullAccess: false, filter: true, tools: "auto", autoFull: false, running: false, status: "done", empty: false,
   side: false, queue: [], createdAt: Date.now(), updatedAt: Date.now()
 };
-let settings = { replyFilter: false, devBranch: false, zcodeProjects: false, leanChats: false, updateClis: false };
+let settings = { replyFilter: false, devBranch: false, zcodeProjects: false, leanChats: false, updateClis: false, acceptRemoteChats: false };
 let clis = [
   { id: "claude", label: "Claude Code", installed: "2.1.288", latest: "2.1.288", state: "current" },
   { id: "codex", label: "Codex", installed: "0.157.0", latest: "0.160.0", state: "behind" },
@@ -48,6 +48,7 @@ const handlers = {
   "session:list": () => [session], "session:transcript": () => [{ kind: "user", text: "Hello there" }],
   "ui:active-chat": () => undefined, "update:status": () => ({ ready: false, waiting: false }),
   "browser:checks": () => [],
+  "remote:macs": () => [],
   "session:update": (_event, _id, patch) => {
     patched.push(patch);
     Object.assign(session, patch);
@@ -116,8 +117,8 @@ app.whenReady().then(async () => {
 
     await check("Settings opens with everything off", async () => {
       await evaluate("Array.from(document.querySelectorAll('.usage-btn')).find(b => b.textContent === 'Settings').click()");
-      await waitFor("document.querySelectorAll('.setting-row').length === 5", "the five settings");
-      assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.setting-row input')).map(i => i.checked)"), [false, false, false, false, false]);
+      await waitFor("document.querySelectorAll('.setting-row').length === 6", "the six settings");
+      assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.setting-row input')).map(i => i.checked)"), [false, false, false, false, false, false]);
     });
 
     await check("turning lean chats on gives a Claude chat its Tools control, starting on Auto", async () => {
@@ -187,7 +188,7 @@ app.whenReady().then(async () => {
       await toggle("Work on a dev branch");
       await waitUntil(() => calls.ensureDev > before, "the dev branch pass");
       assert.deepEqual(saved.at(-1), { devBranch: true });
-      assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.setting-row input')).map(i => i.checked)"), [true, true, true, true, true]);
+      assert.deepEqual(await evaluate("Array.from(document.querySelectorAll('.setting-row input')).map(i => i.checked)"), [true, true, true, true, true, false]);
       if (process.env.CPH_TEST_SCREENSHOT) {
         writeFileSync(process.env.CPH_TEST_SCREENSHOT, (await window.webContents.capturePage()).toPNG());
       }
