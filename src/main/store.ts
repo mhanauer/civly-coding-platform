@@ -8,11 +8,9 @@ import type { PlanConfig } from "./engines/types.ts";
 import { accountEmail, linkShared, newAccountEnv, ownHome, ownHomeLoggedIn, supportsOwnLogin } from "./accounts.ts";
 import { DATA_DIR, IS_DEV_COPY } from "./dataDir.ts";
 
-// Whether the engine's CLI is authenticated on this machine, judged by where
-// each CLI durably stores its login once the interactive flow completes.
-// Claude Code keeps OAuth tokens in the macOS keychain (older builds used
-// ~/.claude/.credentials.json); find without -w never touches the secret
-// itself and never prompts.
+// Whether a saved login exists on this machine. A saved credential can expire;
+// planReady asks Claude and Codex directly before the UI or remote host calls
+// one of their subscription accounts signed in.
 export function engineLoggedIn(plan: PlanConfig): boolean {
   // an added subscription account keeps its login in its own home
   const own = ownHomeLoggedIn(plan);
@@ -166,7 +164,8 @@ export function loadPlans(): PlanConfig[] {
     mkdirSync(DIR, { recursive: true });
     writeFileSync(FILE, JSON.stringify(DEFAULT_PLANS, null, 2), { mode: 0o600 });
   }
-  // installed, loggedIn, ownLogin and email are runtime truth, never stale config
+  // These values come from this Mac, not from the saved plan config. The UI
+  // verifies Claude and Codex login status before showing them as signed in.
   return plans.map((p) => ({
     ...p,
     installed: binaryExists(p.bin),

@@ -16,7 +16,7 @@ let transcript = [];
 const handlers = {
   "plans:list": () => [plan], "remote:macs": () => [mac],
   "settings:get": () => ({ replyFilter: false, devBranch: false, zcodeProjects: false, leanChats: false, updateClis: false, acceptRemoteChats: false }),
-  "usage:get": () => ({}), "effort:defaults": () => ({}), "browser:checks": () => [],
+  "usage:get": () => ({}), "usage:refresh": () => ({}), "effort:defaults": () => ({}), "browser:checks": () => [],
   "update:status": () => ({ ready: false, waiting: false }), "ui:active-chat": () => undefined,
   "projects:list": () => [{ path: "/work/app", name: "app" }],
   "projects:branches": () => ({ current: "main", branches: ["main"] }),
@@ -57,6 +57,11 @@ app.whenReady().then(async () => {
   try {
     await window.loadFile(join(root, "out/renderer/index.html"));
     await waitFor("Boolean(document.querySelector('.run-on-row select'))");
+    await evaluate("Array.from(document.querySelectorAll('.usage-btn')).find(b => b.textContent === 'Accounts').click()");
+    await waitFor("Boolean(document.querySelector('.modal'))");
+    assert.match(await evaluate("document.querySelector('.modal').textContent"), /This Mac/);
+    assert.match(await evaluate("document.querySelector('.modal').textContent"), /Mac Studio.*Signed in/s);
+    await evaluate("Array.from(document.querySelectorAll('.modal-head button')).find(b => b.textContent === 'Close').click()");
     await evaluate(`(() => { const s = document.querySelector('.run-on-row select'); s.value = 'studio'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
     await evaluate("document.querySelector('.project-open').click()");
     await waitFor("Boolean(document.querySelector('.session-item'))");

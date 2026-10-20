@@ -3523,6 +3523,7 @@ export default function App() {
               subscription you add signs in on its own and uses the same
               instructions, rules, skills and settings as your main account.
             </div>
+            <div className="side-label" style={{ padding: 0 }}>This Mac</div>
             {plans.filter((p) => p.installed).length === 0 ? (
               <div className="side-empty">No installed plans</div>
             ) : (
@@ -3665,6 +3666,26 @@ export default function App() {
                   );
                 })
             )}
+            {remoteMacs.map((mac) => (
+              <div key={mac.id}>
+                <div className="side-label" style={{ padding: 0 }}>{mac.label}</div>
+                {!mac.online ? (
+                  <div className="plans-hint">Offline</div>
+                ) : mac.plans.filter((p) => p.installed).length === 0 ? (
+                  <div className="plans-hint">No installed plans</div>
+                ) : mac.plans.filter((p) => p.installed).map((p) => (
+                  <div className="usage-plan" key={p.id}>
+                    <div className="usage-plan-head">
+                      <span className="dot" style={{ background: p.color }} />
+                      {p.label}
+                      <span className="usage-actions">
+                        <span className="usage-note">{p.loggedIn ? "Signed in" : `Sign in on ${mac.label}`}</span>
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ))}
             <div className="side-label" style={{ padding: 0 }}>
               Browser
             </div>

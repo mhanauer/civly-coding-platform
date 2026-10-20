@@ -21,6 +21,7 @@
     "test:auto-effort": "node --experimental-strip-types --test scripts/auto-effort.test.ts",
     "test:data-dir": "node --experimental-strip-types --test scripts/data-dir.test.ts",
     "test:remote": "node --experimental-strip-types --test scripts/remote-macs.test.ts",
+    "test:plan-readiness": "node --experimental-strip-types --test scripts/plan-readiness.test.ts",
     "test:remote-ui": "electron scripts/remote-ui-smoke.mjs",
     "test:code-map": "node --experimental-strip-types --test scripts/code-map.test.ts",
     "test:lean-chats": "node --experimental-strip-types --test scripts/lean-chats.test.ts",

@@ -7,6 +7,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { DATA_DIR, IS_DEV_COPY, addPlan, loadPlans, removePlan, updatePlan } from "./store.ts";
 import { secureDataDir } from "./dataDir.ts";
 import { resolveBin, runEngine } from "./engines/index.ts";
+import { planReady } from "./planReadiness.ts";
 import { conversationStore, forgetAccount, linkShared, ownLoginArgs } from "./accounts.ts";
 import {
   BROWSER_DOWNLOADS,
@@ -567,7 +568,7 @@ function importChat(chat: TransferChat, newId: string, expected: ProjectState, f
   const existing = sessions.get(newId);
   if (existing) return { sessionId: newId, summary: summary(existing) };
   const plan = loadPlans().find((p) => p.id === chat.planId);
-  if (!plan || !hostPlanReady(plan)) return { error: "The destination Mac needs this plan's CLI and sign-in." };
+  if (!plan || !planReady(plan)) return { error: "The destination Mac needs this plan's CLI and sign-in." };
   if (plan.engine !== chat.planEngine || plan.label !== chat.planLabel)
     return { error: "The destination Mac's plan with this ID differs from the source plan." };
   if (plan.models?.length && !plan.models.includes(chat.model))
@@ -592,26 +593,11 @@ function importChat(chat: TransferChat, newId: string, expected: ProjectState, f
 
 let remotePlansCachedAt = 0;
 let remotePlansCached: PlanConfig[] = [];
-function hostPlanReady(plan: PlanConfig): boolean {
-  if (!plan.installed || !plan.loggedIn) return false;
-  // A saved credential file can outlive the actual login. Ask the official
-  // CLIs before offering their subscription plans to another Mac.
-  if (plan.engine === "claude" && !plan.ownLogin && !plan.env?.ANTHROPIC_AUTH_TOKEN && !plan.env?.ANTHROPIC_API_KEY && !plan.env?.ANTHROPIC_BASE_URL && !process.env.ANTHROPIC_AUTH_TOKEN && !process.env.ANTHROPIC_API_KEY) {
-    const result = spawnSync(resolveBin(plan.bin), ["auth", "status"], { encoding: "utf8", timeout: 4000 });
-    try { return result.status === 0 && JSON.parse(result.stdout).loggedIn === true; }
-    catch { return false; }
-  }
-  if (plan.engine === "codex" && !plan.ownLogin && !plan.env?.OPENAI_API_KEY && !process.env.OPENAI_API_KEY) {
-    return spawnSync(resolveBin(plan.bin), ["login", "status"], { encoding: "utf8", timeout: 4000 }).status === 0;
-  }
-  return true;
-}
-
 function safeRemotePlans(): PlanConfig[] {
   if (Date.now() - remotePlansCachedAt < 30_000) return remotePlansCached;
   remotePlansCached = loadPlans().map((plan) => ({
     id: plan.id, label: plan.label, engine: plan.engine, color: plan.color,
-    models: plan.models, installed: plan.installed, loggedIn: hostPlanReady(plan),
+    models: plan.models, installed: plan.installed, loggedIn: planReady(plan),
     bin: "", extraArgs: []
   }));
   remotePlansCachedAt = Date.now();
@@ -1014,7 +1000,7 @@ app.on("window-all-closed", () => {
 // before-quit covers Cmd-Q, quitting from the Dock, and system quit.
 app.on("before-quit", rememberInterruptedTurns);
 
-ipcMain.handle("plans:list", () => loadPlans());
+ipcMain.handle("plans:list", () => loadPlans().map((plan) => ({ ...plan, loggedIn: planReady(plan) })));
 
 ipcMain.handle(
   "plans:create",
@@ -1069,7 +1055,7 @@ interface CreateSessionOptions {
 function createLocalSession(opts: CreateSessionOptions, fromRemote = false): { sessionId?: string; summary?: SessionSummary; error?: string } {
   const plan = loadPlans().find((p) => p.id === opts.planId);
   if (!plan) return { error: `Unknown plan: ${opts.planId}` };
-  if (fromRemote && !hostPlanReady(plan)) return { error: `${plan.label} needs its CLI and sign-in on this Mac.` };
+  if (fromRemote && !planReady(plan)) return { error: `${plan.label} needs its CLI and sign-in on this Mac.` };
   if (fromRemote && (!existsSync(opts.cwd) || !statSync(opts.cwd).isDirectory())) return { error: `Project folder is missing on this Mac: ${opts.cwd}` };
   const session: Session = {
     id: randomUUID(),
