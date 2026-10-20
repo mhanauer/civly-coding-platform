@@ -19,6 +19,7 @@ const session = {
 };
 const transcript = [{ kind: "user", text: "First question" }];
 let sent = "";
+let sendNowCalls = 0;
 const handlers = {
   "plans:list": () => [{ id: "fixture", label: session.planLabel, engine: "codex", installed: true, models: ["fixture"] }],
   "usage:get": () => ({}), "usage:refresh": () => ({}), "effort:defaults": () => ({}),
@@ -34,6 +35,13 @@ const handlers = {
     session.running = true;
     session.status = "running";
     // Deliberately withhold the user echo so the send/echo gap is observable.
+    return {};
+  },
+  "session:queue-send-now": (_event, id, index) => {
+    assert.equal(id, session.id);
+    sendNowCalls += 1;
+    if (sendNowCalls === 1) return { error: "The reply is finishing. Try again in a moment." };
+    session.queue.splice(index, 1);
     return {};
   }
 };
@@ -130,7 +138,19 @@ try {
   await evaluate("document.querySelector('.session-open').click()");
   await waitFor("Boolean(document.querySelector('.transcript .msg-text'))");
   assert.deepEqual(await evaluate(snapshot), [firstAnswer, "This is the new answer."]);
-  console.log("PASS: Running and completed chats reopen without replay, submit preserves prior replies, streamed replies appear once, and saved history reloads correctly.");
+  // A Send now error can be dismissed, and a later Send now clears it.
+  session.queue = ["Queued question"];
+  window.webContents.send("sessions:changed");
+  await waitFor("Boolean(document.querySelector('.queue-item .mini-btn'))");
+  await evaluate("document.querySelector('.queue-item .mini-btn').click()");
+  await waitFor("document.querySelector('.banner')?.textContent.includes('The reply is finishing')");
+  await evaluate("document.querySelector('.banner .banner-x').click()");
+  await waitFor("!document.querySelector('.banner')");
+  await evaluate("document.querySelector('.queue-item .mini-btn').click()");
+  await waitFor("!document.querySelector('.queue-item')");
+  assert.equal(sendNowCalls, 2);
+  assert.equal(await evaluate("Boolean(document.querySelector('.banner'))"), false);
+  console.log("PASS: Running and completed chats reopen without replay, submit preserves prior replies, streamed replies appear once, saved history reloads correctly, and a Send now error can be dismissed.");
   window.destroy();
   clearTimeout(timeout);
   rmSync(temp, { recursive: true, force: true });

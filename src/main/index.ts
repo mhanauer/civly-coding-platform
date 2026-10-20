@@ -2030,9 +2030,11 @@ handleSession("session:send", (_e, sessionId: string, prompt: string) => {
 
 // Stops the running turn and waits for the engine to exit, so the next
 // turn can resume the same conversation. False if it did not stop in time.
+// An engine that already sent its reply but has not exited yet is stopped
+// too.
 async function stopRun(session: Session): Promise<boolean> {
   const handle = session.handle;
-  if (!session.running || !handle) return true;
+  if (!(session.running || session.turnActive) || !handle) return true;
   handle.cancel();
   return Promise.race([
     handle.done.then(() => true),
@@ -2047,10 +2049,10 @@ handleSession("session:steer", async (_e, sessionId: string, prompt: string) => 
   const session = sessions.get(sessionId);
   if (!session) return { error: "Unknown session" };
   if (session.transferLock || session.transferredTo) return { error: "This chat is moving to another Mac." };
-  if (session.turnActive || session.settling) return { error: "The reply is finishing. Send again in a moment." };
+  if (session.settling) return { error: "The reply is finishing. Send again in a moment." };
   if (!prompt.trim()) return { error: "Empty prompt" };
   if (session.steering) return { error: "Already steering this chat" };
-  if (!session.running || !session.handle) {
+  if (!(session.running || session.turnActive) || !session.handle) {
     startTurn(session, prompt);
     return {};
   }
@@ -2084,7 +2086,7 @@ handleSession("session:edit-last", async (_e, sessionId: string, text: string) =
   const session = sessions.get(sessionId);
   if (!session) return { error: "Unknown session" };
   if (session.transferLock || session.transferredTo) return { error: "This chat is moving to another Mac." };
-  if (session.turnActive || session.settling) return { error: "The reply is finishing. Try the edit in a moment." };
+  if (session.settling) return { error: "The reply is finishing. Try the edit in a moment." };
   if (!text.trim()) return { error: "Empty message" };
   if (session.steering) return { error: "This chat is already switching messages" };
   const last = [...session.transcript].reverse().find((e) => e.kind === "user");
@@ -2185,12 +2187,12 @@ handleSession("session:queue-send-now", async (_e, sessionId: string, index: num
   if (session.transferLock || session.transferredTo) return { error: "This chat is moving to another Mac." };
   const [text] = session.queue.splice(index, 1);
   if (text === undefined) return { error: "That message is no longer queued" };
-  if (session.turnActive || session.settling) {
+  if (session.settling || session.steering) {
     session.queue.splice(index, 0, text);
-    return { error: "The reply is finishing. Try again in a moment." };
+    return { error: session.steering ? "Another message is already on its way. Try again in a moment." : "The reply is finishing. Try again in a moment." };
   }
   persistChat(session);
-  if (!session.running) {
+  if (!session.running && !session.turnActive) {
     startTurn(session, text);
     return {};
   }
@@ -2359,7 +2361,8 @@ function engineDefaultEffort(engine: string): string {
 // sidebar light goes neutral instead of red.
 handleSession("session:cancel", (_e, sessionId: string) => {
   const session = sessions.get(sessionId);
-  if (session?.running && session.handle) {
+  // an engine that sent its reply but has not exited still shows as running
+  if (session && (session.running || session.turnActive) && !session.settling && session.handle) {
     pushEvent(session, { kind: "status", text: STOPPED });
     session.handle.cancel();
   }

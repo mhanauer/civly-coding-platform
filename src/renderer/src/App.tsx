@@ -3220,7 +3220,7 @@ export default function App() {
       onPatch={(patch) => void patchSession(box, patch)}
       onQueueSendNow={(index) =>
         void window.hub.queueSendNow(box.id, index).then((r) => {
-          if (r.error) box.setError(r.error);
+          box.setError(r.error ?? "");
           void refreshSessions();
         })
       }
@@ -4080,7 +4080,14 @@ export default function App() {
             )}
           </div>
         ) : null}
-        {banner ? <div className="banner">{banner}</div> : null}
+        {banner ? (
+          <div className="banner">
+            <span>{banner}</span>
+            <button className="banner-x" title="Dismiss" onClick={() => setBanner("")}>
+              ×
+            </button>
+          </div>
+        ) : null}
         {browserChecks.length ? (
           <div className="update-bar browser-checks">
             <span>
@@ -4199,7 +4206,18 @@ export default function App() {
                 const error = sideErrors[tab.id] ?? "";
                 return (
                   <div className="side-chat">
-                    {error ? <div className="banner">{error}</div> : null}
+                    {error ? (
+                      <div className="banner">
+                        <span>{error}</span>
+                        <button
+                          className="banner-x"
+                          title="Dismiss"
+                          onClick={() => setSideErrors((prev) => ({ ...prev, [tab.id]: "" }))}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ) : null}
                     {tab.session
                       ? renderChat(tab.session, sideBoxFor(tab.id, tab.session.id))
                       : renderChat(sideStart, sideBoxFor(tab.id, ""), {

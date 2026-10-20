@@ -871,6 +871,27 @@ button.stop {
   color: #f5dede;
   padding: 8px 16px;
   font-size: 13px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.banner > span {
+  flex: 1;
+}
+
+.banner-x {
+  background: none;
+  border: none;
+  color: #f5dede;
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+  opacity: 0.7;
+}
+
+.banner-x:hover {
+  opacity: 1;
 }
 
 .header {
