@@ -17,6 +17,9 @@ let plans = [
   { id: "chatgpt-main", label: "ChatGPT (Codex)", engine: "codex", installed: true, loggedIn: true, models: ["gpt-6-sol"], color: "#10a37f" },
   { id: "chatgpt-2", label: "ChatGPT (second)", engine: "codex", installed: true, loggedIn: false, ownLogin: true, env: { CODEX_HOME: "/data/accounts/chatgpt-2" }, models: ["gpt-6-sol"], color: "#10a37f" }
 ];
+// Reset expirations stay days ahead: one due today would show as a time.
+const resetExpiries = [Date.now() + 2 * 86400000, Date.now() + 9 * 86400000];
+const shortDay = (ms) => new Date(ms).toLocaleDateString([], { month: "short", day: "numeric" });
 const usage = {
   "chatgpt-main": {
     windows: [{ label: "Weekly", usedPct: 90, resetsAt: Date.now() + 3 * 86400000 }],
@@ -24,8 +27,8 @@ const usage = {
     resets: {
       availableCount: 2,
       details: [
-        { title: "Full reset", expiresAt: 1792701915000 },
-        { title: "Full reset", expiresAt: 1793300477000 }
+        { title: "Full reset", expiresAt: resetExpiries[0] },
+        { title: "Full reset", expiresAt: resetExpiries[1] }
       ]
     },
     updatedAt: Date.now()
@@ -137,8 +140,7 @@ app.whenReady().then(async () => {
       assert.match(text, /90% used/);
       assert.match(text, /Credits: 62,500 remaining/);
       assert.match(text, /Resets: 2 available/);
-      assert.match(text, /Full reset expires Oct 22/);
-      assert.match(text, /Full reset expires Oct 29/);
+      for (const ms of resetExpiries) assert.ok(text.includes(`Full reset expires ${shortDay(ms)}`), text);
     });
 
     await check("a Claude subscription is the default, with no API fields", async () => {
