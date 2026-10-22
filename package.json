@@ -16,6 +16,7 @@
     "test:limit-fallback": "node --experimental-strip-types --test scripts/limit-fallback.test.ts",
     "test:engine-env": "node --experimental-strip-types --test scripts/engine-env.test.ts",
     "test:muse": "node --experimental-strip-types --test scripts/muse-adapter.test.ts",
+    "test:models": "node --experimental-strip-types --test scripts/model-upgrades.test.ts",
     "test:muse-usage": "node --experimental-strip-types --test scripts/muse-usage.test.ts",
     "test:codex-routing": "node --experimental-strip-types --test scripts/codex-routing-recovery.test.ts",
     "test:auto-effort": "node --experimental-strip-types --test scripts/auto-effort.test.ts",

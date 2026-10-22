@@ -7,6 +7,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { DATA_DIR, IS_DEV_COPY, addPlan, loadPlans, removePlan, updatePlan } from "./store.ts";
 import { secureDataDir } from "./dataDir.ts";
 import { resolveBin, runEngine } from "./engines/index.ts";
+import { upgradeModels } from "./engines/models.ts";
 import { planReady } from "./planReadiness.ts";
 import { conversationStore, forgetAccount, linkShared, ownLoginArgs } from "./accounts.ts";
 import {
@@ -414,11 +415,15 @@ function loadChats(): void {
         const plan = plans.find((p) => p.id === record.planId);
         if (!plan) continue;
         // a saved model can fall out of the plan's list (the plan's models
-        // were edited); snap back so the picker never shows a dead value
+        // were edited, or moved to a newer version); take its newer version
+        // or the plan's first model so the picker never shows a dead value
+        const newer = record.model ? upgradeModels([record.model], plan.models ?? [])[0] : undefined;
         const model =
           record.model && (!plan.models?.length || plan.models.includes(record.model))
             ? record.model
-            : plan.models?.[0] ?? "default";
+            : newer && plan.models?.includes(newer)
+              ? newer
+              : plan.models?.[0] ?? "default";
         sessions.set(record.id, {
           id: record.id,
           plan,

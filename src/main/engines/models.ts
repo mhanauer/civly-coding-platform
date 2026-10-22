@@ -147,7 +147,8 @@ function claudeCatalog(home: string): string[] {
   return [];
 }
 
-// Codex refreshes this cache in its home from the account's model list.
+// Codex refreshes this cache in its home from the account's model list;
+// hidden rows are internal models the picker does not offer.
 function codexCatalog(home: string): string[] {
   const f = join(home, "models_cache.json");
   if (!existsSync(f)) return [];
@@ -156,6 +157,7 @@ function codexCatalog(home: string): string[] {
     if (Array.isArray(x)) {
       x.forEach(walk);
     } else if (x && typeof x === "object") {
+      if ((x as { visibility?: unknown }).visibility === "hide") return;
       const slug = (x as { slug?: unknown }).slug;
       if (typeof slug === "string" && slug.startsWith("gpt-") && !ids.includes(slug)) ids.push(slug);
       Object.values(x as Record<string, unknown>).forEach(walk);
@@ -246,32 +248,72 @@ export function museCatalog(dir = join(homedir(), ".local", "share", "muse", "mo
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const cache = new Map<string, { at: number; models: string[] }>();
 
-export function discoverModels(plan: PlanConfig, defaults: string[]): string[] {
-  if (plan.engine === "opencode" || plan.engine === "qwen") return [];
-  const key = `${plan.id}|${plan.engine}|${plan.env?.ANTHROPIC_BASE_URL ?? ""}`;
+function cached(key: string, read: () => string[]): string[] {
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.models;
+  const models = read();
+  cache.set(key, { at: Date.now(), models });
+  return models;
+}
 
-  let found: string[] = [];
-  if (plan.engine === "claude" && plan.env?.ANTHROPIC_BASE_URL && plan.env?.ANTHROPIC_AUTH_TOKEN) {
-    const cands = zaiFetch(plan.env.ANTHROPIC_BASE_URL, plan.env.ANTHROPIC_AUTH_TOKEN);
-    found = pickModels(cands.map((c) => ({ ...c, isDefault: defaults.includes(c.id) })));
-  } else if (plan.engine === "claude") {
-    found = pickModels(makeCandidates(claudeCatalog(engineHome(plan) ?? ""), defaults));
-  } else if (plan.engine === "codex") {
-    found = pickModels(makeCandidates(codexCatalog(engineHome(plan) ?? ""), defaults), 3);
-  } else if (plan.engine === "gemini") {
-    found = pickModels(makeCandidates(geminiCatalog(), defaults));
-  } else if (plan.engine === "muse") {
-    found = museCatalog().slice(0, 2);
-  } else if (plan.engine === "kimi") {
-    const { models, defaultModel } = kimiCatalog();
-    if (defaultModel && models.length > 0) {
-      const series = parseModel(defaultModel).family;
-      const next = models.find((m) => parseModel(m).family !== series);
-      found = [defaultModel, ...(next ? [next] : [])];
-    }
+// "gpt-6.1-sol" -> line "gpt-sol", version [6,1]; "claude-opus-5-5" ->
+// "claude-opus", [5,5]. Every numeric token is version, the words are the
+// line, so a variant (muse-wonder-full, a -contributor row) is its own line.
+export function modelLine(id: string): { line: string; version: number[] } {
+  const words: string[] = [];
+  const version: number[] = [];
+  for (const t of id.split("-")) {
+    if (/^\d+(\.\d+)*$/.test(t)) version.push(...t.split(".").map(Number));
+    else words.push(t);
   }
-  cache.set(key, { at: Date.now(), models: found });
-  return found;
+  return { line: words.join("-"), version };
+}
+
+// Moves each model to the newest release of its own line in the catalog, so
+// a plan follows new versions of the models it already has without picking up
+// other lines. Order is kept and nothing moves to an older version.
+export function upgradeModels(current: string[], catalog: string[]): string[] {
+  const out = current.map((id) => {
+    const { line } = modelLine(id);
+    let best = id;
+    for (const c of catalog) {
+      const m = modelLine(c);
+      if (m.line === line && cmpVersion(m.version, modelLine(best).version) > 0) best = c;
+    }
+    return best;
+  });
+  return out.filter((id, i) => out.indexOf(id) === i);
+}
+
+// Every model id in the catalog a subscription CLI keeps on this Mac (Claude
+// Code, Codex, Muse Code); [] for plans without one or on any miss.
+export function catalogModels(plan: PlanConfig): string[] {
+  if (plan.engine === "claude" && !plan.env?.ANTHROPIC_BASE_URL) {
+    return cached(`catalog|${plan.id}|claude`, () => claudeCatalog(engineHome(plan) ?? ""));
+  }
+  if (plan.engine === "codex") return cached(`catalog|${plan.id}|codex`, () => codexCatalog(engineHome(plan) ?? ""));
+  if (plan.engine === "muse") return cached("catalog|muse", () => museCatalog());
+  return [];
+}
+
+// Newest model lines for a plan without a catalog of its own versions (key
+// plans, Gemini, Kimi).
+export function discoverModels(plan: PlanConfig, defaults: string[]): string[] {
+  const key = `${plan.id}|${plan.engine}|${plan.env?.ANTHROPIC_BASE_URL ?? ""}`;
+  return cached(key, () => {
+    if (plan.engine === "claude" && plan.env?.ANTHROPIC_BASE_URL && plan.env?.ANTHROPIC_AUTH_TOKEN) {
+      const cands = zaiFetch(plan.env.ANTHROPIC_BASE_URL, plan.env.ANTHROPIC_AUTH_TOKEN);
+      return pickModels(cands.map((c) => ({ ...c, isDefault: defaults.includes(c.id) })));
+    }
+    if (plan.engine === "gemini") return pickModels(makeCandidates(geminiCatalog(), defaults));
+    if (plan.engine === "kimi") {
+      const { models, defaultModel } = kimiCatalog();
+      if (defaultModel && models.length > 0) {
+        const series = parseModel(defaultModel).family;
+        const next = models.find((m) => parseModel(m).family !== series);
+        return [defaultModel, ...(next ? [next] : [])];
+      }
+    }
+    return [];
+  });
 }

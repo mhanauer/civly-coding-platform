@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { binaryExists } from "./engines/index.ts";
-import { discoverModels, parseModel } from "./engines/models.ts";
+import { catalogModels, discoverModels, upgradeModels } from "./engines/models.ts";
 import type { PlanConfig } from "./engines/types.ts";
 import { accountEmail, linkShared, newAccountEnv, ownHome, ownHomeLoggedIn, supportsOwnLogin } from "./accounts.ts";
 import { DATA_DIR, IS_DEV_COPY } from "./dataDir.ts";
@@ -61,18 +61,11 @@ function removedIds(): string[] {
 }
 
 // ChatGPT plans start on Sol; Astra is the frontier alternative.
-const CHATGPT_MODELS = ["gpt-6-sol", "gpt-6-astra"];
+const CHATGPT_MODELS = ["gpt-6.1-sol", "gpt-6-astra"];
 
 // Frontier and next, exact IDs the CLI accepts (verified against the model
 // IDs recorded in ~/.claude).
 const CLAUDE_MODELS = ["claude-opus-5-5", "claude-fable-5-1"];
-
-// Moves the Sol line to the front, so a ChatGPT plan's first model, the one
-// new chats start on, is Sol whenever its list has one.
-function solFirst(models: string[]): string[] {
-  const sol = models.find((m) => parseModel(m).family === "sol");
-  return sol ? [sol, ...models.filter((m) => m !== sol)] : models;
-}
 
 const DEFAULT_PLANS: Array<Omit<PlanConfig, "installed">> = [
   {
@@ -145,19 +138,20 @@ export function loadPlans(): PlanConfig[] {
     );
     plans = [...saved, ...missing.map((p) => ({ ...p, installed: false }))];
     plans = plans.map((p) => {
-      // an explicit custom list (not the "default" placeholder) is the
-      // user's choice and stays untouched
-      if (p.models && p.models.length > 0 && p.models[0] !== "default") return p;
+      // an explicit list (not the "default" placeholder) is the user's
+      // choice of models; it only moves to newer versions of the same models
+      const custom = p.models && p.models.length > 0 && p.models[0] !== "default" ? p.models : null;
       const def = DEFAULT_PLANS.find((d) => d.id === p.id);
       const fallback = def?.models ?? engineModels(p);
-      // Keep the chosen Codex pair even when the CLI cache lists older models.
-      if (def?.id === "chatgpt-codex") return { ...p, models: fallback };
-      // Otherwise refresh from the CLI's own catalog: three model lines for
-      // Codex, two for other engines. A missing catalog uses the defaults.
+      // A subscription CLI's own catalog (Claude, ChatGPT, Muse) moves each
+      // model to its newest version: gpt-6-sol to gpt-6.1-sol, and so on.
+      const catalog = catalogModels(p);
+      if (catalog.length > 0) return { ...p, models: upgradeModels(custom ?? fallback, catalog) };
+      if (custom) return p;
+      // Other plans take the newest two model lines their source lists. A
+      // missing source uses the defaults.
       const discovered = discoverModels(p, fallback);
-      const expectedCount = p.engine === "codex" ? 3 : 2;
-      const models = discovered.length === expectedCount ? discovered : fallback;
-      return { ...p, models: p.engine === "codex" ? solFirst(models) : models };
+      return { ...p, models: discovered.length === 2 ? discovered : fallback };
     });
   } else {
     plans = DEFAULT_PLANS.map((p) => ({ ...p, installed: false }));
