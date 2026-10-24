@@ -65,7 +65,20 @@ export type EngineEvent =
   // tokens: what the run used, when the engine reports it. costUsd: what it
   // would cost at API list prices, by the engine's own estimate (Claude's)
   | { kind: "done"; ok: boolean; summary?: string; tokens?: TokenCount; costUsd?: number }
-  | { kind: "filtered"; text: string; original: string };
+  | { kind: "filtered"; text: string; original: string }
+  // background agents and commands still running (Claude). idle: the reply
+  // has ended and only these keep the run open. Drives the app's check-ins,
+  // not saved.
+  | { kind: "background"; tasks: BackgroundTask[]; idle: boolean };
+
+export interface BackgroundTask {
+  id: string;
+  // Claude Code's task type: local_bash, local_agent, ...
+  type: string;
+  description: string;
+  // epoch ms the chat first saw it running
+  startedAt: number;
+}
 
 // input counts cached and cache-written tokens too: everything the model read
 export interface TokenCount {
@@ -143,6 +156,9 @@ export interface EngineAdapter {
   // exit. Checked after every line; without it stdin closes at the first
   // result.
   inputDone?(): boolean;
+  // A message sent while the run waits on background work (the app's
+  // check-in); the stdin line to send.
+  userMessage?(text: string): string;
 }
 
 export interface RunHandle {
@@ -150,4 +166,6 @@ export interface RunHandle {
   cancel(): void;
   // answers a permission request; a no-op for engines that cannot ask
   respond(requestId: string, allow: boolean, input?: Record<string, unknown>, alwaysRules?: unknown[]): void;
+  // sends a message into the running engine; false when it cannot take one
+  say(text: string): boolean;
 }

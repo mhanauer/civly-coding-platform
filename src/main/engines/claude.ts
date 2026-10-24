@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { EngineAdapter, EngineEvent, SendOptions, TokenCount } from "./types.ts";
+import { basename } from "node:path";
+import type { BackgroundTask, EngineAdapter, EngineEvent, SendOptions, TokenCount } from "./types.ts";
 import { classifyTool } from "./steps.ts";
 import { denyMessage } from "./claudeDeny.ts";
 import { isLimitError } from "../limitFallback.ts";
@@ -62,7 +63,7 @@ interface StreamLine {
   command_uuid?: string;
   state?: string;
   // background_tasks_changed: every background task still running
-  tasks?: Array<{ task_type?: string }>;
+  tasks?: Array<{ task_id?: string; task_type?: string; description?: string }>;
   // init: the MCP servers this run has and whether each connected
   mcp_servers?: Array<{ name?: string; status?: string }>;
   // api_retry: why a request failed and how long until the next try
@@ -90,6 +91,28 @@ function snippet(value: unknown, max = 140): string {
 
 // tool output kept per step; enough to see what happened, not a log dump
 const OUTPUT_LIMIT = 1500;
+
+// How often the app asks a chat to check on background work it is waiting
+// for (index.ts); the wait guide below tells the model so.
+export const CHECK_IN_MINUTES = 10;
+
+// Appended to Claude Code's system prompt. A wait that cannot end keeps the
+// chat open with nobody told: a loop that watched "the newest run" while
+// others kept pushing, or that split words the bash way in zsh and never
+// saw "completed".
+export function waitGuide(shell = basename(process.env.SHELL ?? "")): string {
+  const zsh =
+    shell === "zsh"
+      ? " Commands run in zsh, where an unquoted $var is not split into words (set -- $s leaves $2 empty), so split with read, jq or ${s%% *}."
+      : "";
+  return (
+    "When you end a turn while a background command or agent runs, you are woken only when it exits, and the user waits until then. " +
+    "So make every wait able to end on its own: watch one fixed thing (a run ID, not the newest run); stop on success, failure, cancellation " +
+    "and a time limit a little past how long it normally takes; print one status line per check; and keep errors visible." +
+    zsh +
+    ` Tell the user what you are waiting for and about how long it takes. The app asks you to check on background work every ${CHECK_IN_MINUTES} minutes.`
+  );
+}
 
 // A run's tokens across every model it used; undefined when the result
 // carries none (older CLI builds)
@@ -125,19 +148,29 @@ export function claudeAdapter(): EngineAdapter {
   // the chat's folder: its .claude settings hold the project deny rules
   let cwd = "";
   // Claude Code refuses every permission request and question once stdin
-  // closes ("Stream closed"), so stdin stays open until the message sent
-  // this run is answered and no background agent can come back to ask.
+  // closes ("Stream closed"), so stdin stays open until every message sent
+  // this run is answered and no background work can come back to ask.
   // A result alone is not enough: a resumed chat first reports a result for
   // the notice about a background job the last run stopped, before it reads
-  // your message at all.
+  // your message at all. Besides the prompt, the app can send a check-in
+  // while background work runs.
   const promptId = randomUUID();
-  let promptDone = false;
-  // background agents running; Claude Code waits for these after stdin
-  // closes and picks the turn back up when each reports in. Background
-  // shells are left out: Claude Code stops those when stdin closes.
-  let agents = 0;
+  const unanswered = new Set<string>([promptId]);
+  // background agents and commands running, by task id. Claude Code waits
+  // for these after the reply (stdin closed or not) and picks the turn back
+  // up when each ends.
+  const tasks = new Map<string, BackgroundTask>();
   // the last thing seen was a result, with no work since
   let settled = false;
+  // the background state last told to the app; nothing running to start
+  let reported = "false:";
+  const report = (emit: (e: EngineEvent) => void): void => {
+    const idle = settled && tasks.size > 0;
+    const key = `${idle}:${[...tasks.keys()].join(",")}`;
+    if (key === reported) return;
+    reported = key;
+    emit({ kind: "background", tasks: [...tasks.values()], idle });
+  };
 
   return {
     kind: "claude",
@@ -174,12 +207,19 @@ export function claudeAdapter(): EngineAdapter {
       // a lean chat keeps only the servers given here, and no skills or
       // slash commands; their lists ride along with every step otherwise
       if (opts.lean) args.push("--strict-mcp-config", "--disable-slash-commands");
+      args.push("--append-system-prompt", waitGuide());
       return args;
     },
 
     initialInput(opts: SendOptions): string {
       // the id comes back on the result that answers this message
       return JSON.stringify({ type: "user", uuid: promptId, message: { role: "user", content: opts.prompt } });
+    },
+
+    userMessage(text: string): string {
+      const uuid = randomUUID();
+      unanswered.add(uuid);
+      return JSON.stringify({ type: "user", uuid, message: { role: "user", content: text } });
     },
 
     // A question's answers ride in updatedInput.answers, keyed by question
@@ -212,10 +252,11 @@ export function claudeAdapter(): EngineAdapter {
 
       if (obj.type === "assistant" || obj.type === "user" || obj.type === "stream_event" || obj.type === "control_request") {
         settled = false;
+        report(emit);
       }
 
       if (obj.type === "command_lifecycle") {
-        if (obj.command_uuid === promptId && obj.state !== "queued" && obj.state !== "started") promptDone = true;
+        if (obj.command_uuid && obj.state !== "queued" && obj.state !== "started") unanswered.delete(obj.command_uuid);
         return;
       }
 
@@ -289,10 +330,20 @@ export function claudeAdapter(): EngineAdapter {
           emit({ kind: "usage", windows: [], limited: true });
         }
         if (obj.subtype === "background_tasks_changed" && Array.isArray(obj.tasks)) {
-          const running = obj.tasks.filter((t) => t.task_type !== "local_bash").length;
-          // an agent that just finished brings its own turn; wait for its result
-          if (running < agents) settled = false;
-          agents = running;
+          const now = Date.now();
+          const running = new Map<string, BackgroundTask>();
+          obj.tasks.forEach((t, i) => {
+            const id = t.task_id ?? `task-${i}`;
+            running.set(
+              id,
+              tasks.get(id) ?? { id, type: t.task_type ?? "", description: t.description ?? "", startedAt: now }
+            );
+          });
+          // work that just ended brings its own turn; wait for its result
+          if ([...tasks.keys()].some((id) => !running.has(id))) settled = false;
+          tasks.clear();
+          for (const [id, t] of running) tasks.set(id, t);
+          report(emit);
         }
         return;
       }
@@ -362,8 +413,12 @@ export function claudeAdapter(): EngineAdapter {
                 : denyMessage(cwd, d.tool_name ?? "", input, what)
           });
         }
-        if (!obj.origin || obj.user_message_uuids?.includes(promptId)) promptDone = true;
+        // a result lists the messages it answers; older builds leave the
+        // list out, and then a result with no origin answers what was sent
+        if (obj.user_message_uuids?.length) for (const id of obj.user_message_uuids) unanswered.delete(id);
+        else if (!obj.origin) unanswered.clear();
         settled = true;
+        report(emit);
         // The turn failed on the plan's limit. Claude Code stays open while
         // a background agent or command runs, and those are on the same
         // plan, so the chat moves on (index.ts) instead of waiting for them.
@@ -379,7 +434,7 @@ export function claudeAdapter(): EngineAdapter {
     },
 
     inputDone(): boolean {
-      return promptDone && agents === 0 && settled;
+      return unanswered.size === 0 && tasks.size === 0 && settled;
     }
   };
 }

@@ -115,7 +115,8 @@ export function runEngine(
       cancelled = true;
       started?.cancel();
     },
-    respond: (...answer) => started?.respond(...answer)
+    respond: (...answer) => started?.respond(...answer),
+    say: (text) => started?.say(text) ?? false
   };
 }
 
@@ -129,7 +130,7 @@ function startEngine(
   if (!makeAdapter) {
     onEvent({ kind: "error", text: `No adapter yet for engine "${plan.engine}".` });
     onEvent({ kind: "done", ok: false });
-    return { done: Promise.resolve(), cancel: () => {}, respond: () => {} };
+    return { done: Promise.resolve(), cancel: () => {}, respond: () => {}, say: () => false };
   }
   const adapter = makeAdapter();
   adapter.beginRun?.();
@@ -138,7 +139,7 @@ function startEngine(
   if (!existsSync(binPath)) {
     onEvent({ kind: "error", text: `"${plan.bin}" is not installed on this machine.` });
     onEvent({ kind: "done", ok: false });
-    return { done: Promise.resolve(), cancel: () => {}, respond: () => {} };
+    return { done: Promise.resolve(), cancel: () => {}, respond: () => {}, say: () => false };
   }
 
   // a code map rides in front of a new chat's first message only; a resumed
@@ -267,6 +268,11 @@ function startEngine(
     respond: (requestId, allow, toolInput, alwaysRules) => {
       const line = adapter.permissionResponse?.(requestId, allow, toolInput, alwaysRules);
       if (line && proc.stdin && !proc.stdin.destroyed) proc.stdin.write(line + "\n");
+    },
+    say: (text) => {
+      if (!adapter.userMessage || !proc.stdin || proc.stdin.destroyed || proc.stdin.writableEnded) return false;
+      proc.stdin.write(adapter.userMessage(text) + "\n");
+      return true;
     }
   };
 }

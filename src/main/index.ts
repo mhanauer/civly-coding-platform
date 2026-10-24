@@ -42,6 +42,7 @@ import {
 import { allUsage, onUsageChange, recordLimitError, recordUsage, refreshCodex, refreshPlanUsage, saveMuseSubscriptionSnapshot } from "./usage.ts";
 import { resolveMuseSnapshot, type MuseSnapshotInput } from "./museUsage.ts";
 import { codexRoutingTimedOut } from "./codexRoutingRecovery.ts";
+import { backgroundWatch } from "./backgroundWait.ts";
 import { listSkills, personalSkillDirs, projectSkillDirs } from "./skills.ts";
 import {
   attachedPaths, compareFileStates, compareProjectStates, fileState, listRemoteMacs, loadRemoteCache, projectState,
@@ -1686,6 +1687,10 @@ function startTurn(
   let limitStall: ReturnType<typeof setTimeout> | undefined;
   let repliedSinceLimit = false;
   let stalledOnLimit = false;
+  const waiting = backgroundWatch({
+    say: (text) => session.handle === handle && session.running && handle.say(text),
+    status: (text) => pushEvent(session, { kind: "status", text })
+  });
   const handle = runEngine(
     runPlan,
     {
@@ -1703,7 +1708,14 @@ function startTurn(
       // the stall stop below already explains itself as a limit; the
       // engine's own exit message would only add noise
       if (stalledOnLimit && event.kind === "error") return;
-      if (event.kind === "done") clearTimeout(limitStall);
+      if (event.kind === "background") {
+        waiting.feed(event.tasks, event.idle);
+        return;
+      }
+      if (event.kind === "done") {
+        clearTimeout(limitStall);
+        waiting.stop();
+      }
       if (carriesOn(event)) repliedSinceLimit = true;
       if (event.kind === "usage" && event.limited && !limitStall) {
         repliedSinceLimit = false;
