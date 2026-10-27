@@ -3,7 +3,7 @@
 // CPH_TEST_APP_ROOT can point to an extracted or packaged app to test its build.
 import { app, BrowserWindow, ipcMain } from "electron";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -19,6 +19,7 @@ const session = {
 };
 const transcript = [{ kind: "user", text: "First question" }];
 const answers = [];
+const pending = new Set();
 // what the next answer gets back from the main process
 let answerReply = {};
 const handlers = {
@@ -68,6 +69,10 @@ const waitFor = async (expression, what = expression) => {
   }
 };
 const emit = (event) => {
+  if (event.kind === "permission") pending.add(event.requestId);
+  if (event.kind === "permission_decision") pending.delete(event.requestId);
+  if (event.kind === "done" || event.kind === "user") pending.clear();
+  if (session.running) session.status = pending.size ? "waiting" : "running";
   transcript.push(event);
   window.webContents.send("session:event", { sessionId: session.id, event });
 };
@@ -78,6 +83,12 @@ const card = (n) => `document.querySelectorAll('.transcript .perm-card')[${n}]`;
 const option = (n, label) =>
   `Array.from(${card(n)}.querySelectorAll('.q-option')).find(b => b.textContent.startsWith(${JSON.stringify(label)}))`;
 const click = (expression) => evaluate(`${expression}.click()`);
+const screenshot = async (name) => {
+  if (process.env.CPH_STATUS_SCREENSHOTS) {
+    await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 100))))");
+    writeFileSync(join(process.env.CPH_STATUS_SCREENSHOTS, name), (await window.webContents.capturePage()).toPNG());
+  }
+};
 // resolves once an answer beyond the first `count` reached the main process
 const sent = async (count) => {
   const start = Date.now();
@@ -101,11 +112,16 @@ try {
   await waitFor("Boolean(document.querySelector('.session-open'))");
   await evaluate("document.querySelector('.session-open').click()");
   await waitFor("document.querySelector('.transcript')?.textContent.includes('First question')");
+  await waitFor("Boolean(document.querySelector('.run-badge.running .status-light.running'))");
 
   // 1. Three questions: pick an answer for each, then Send answers.
   await check("three questions: picks for every question send", async () => {
     ask("q1", threeQuestions);
     await waitFor(`Boolean(${card(0)})`, "the question card");
+    await waitFor("document.querySelector('.run-badge.waiting')?.textContent.includes('Needs your response')");
+    assert.equal(await evaluate("Boolean(document.querySelector('.session-open .status-light.waiting'))"), true);
+    assert.equal(await evaluate("document.querySelector('.status-light.waiting').getAttribute('aria-label')"), "Needs your response");
+    assert.match(await evaluate("document.querySelector('.chat-wait-note.waiting').textContent"), /Answer the question/);
     await click(option(0, "Include it"));
     // Send waits on the rest, and says how many are left
     await waitFor(`${card(0)}.querySelector('.send-btn').disabled`, "Send disabled until every question has an answer");
@@ -114,6 +130,9 @@ try {
     // other output arriving while the card waits must not clear the picks
     emit({ kind: "thinking_delta", text: "", startedAt: Date.now() });
     emit({ kind: "thinking_delta", text: "a background helper reports in" });
+    await waitFor("!document.querySelector('.status-light.running, .step-spinner, .stream-cursor, .shimmer, .msg-thinking')", "all activity animations to stop while an answer is needed");
+    assert.equal(await evaluate("getComputedStyle(document.querySelector('.status-light.waiting')).animationName"), "none");
+    await screenshot("chat-needs-response.png");
     await click(option(0, "Update the draft"));
     await click(option(0, "Merge after checks"));
     await waitFor(`!${card(0)}.querySelector('.send-btn').disabled`, "Send answers enabled");
@@ -129,6 +148,7 @@ try {
     });
     emit({ kind: "permission_decision", requestId: "q1", allowed: true, always: false, answers: last.answers });
     await waitFor(`${card(0)}.classList.contains('done')`, "the card shows answered");
+    await waitFor("Boolean(document.querySelector('.run-badge.running')) && !document.querySelector('.chat-wait-note')", "answering restores active work");
   });
 
   // 2. A pick that the main process could not deliver must not leave the
@@ -224,6 +244,56 @@ try {
       await waitFor(`${card(n)}.classList.contains('done') && ${card(n)}.textContent.includes('Ship all of it')`, "the card to show the reply");
     });
   }
+
+  await check("background waits stay amber through reopening and yield to a permission request", async () => {
+    const showBackground = () => {
+      session.status = "background";
+      window.webContents.send("sessions:changed");
+    };
+    emit({ kind: "thinking", text: "Done checking", ms: 100 });
+    emit({ kind: "tool", name: "Bash", id: "wait-build", step: { type: "terminal", label: "Run command", target: "Wait for the dev build" } });
+    emit({ kind: "text", text: "The dev build is queued. I will check it when it finishes." });
+    showBackground();
+    await waitFor("Boolean(document.querySelector('.run-badge.background'))");
+    assert.match(await evaluate("document.querySelector('.chat-wait-note.background').textContent"), /continue when the work finishes/);
+    assert.equal(await evaluate("Boolean(document.querySelector('.session-open .status-light.background'))"), true);
+    assert.equal(await evaluate("Boolean(document.querySelector('.status-light.running, .step-spinner, .stream-cursor, .shimmer, .msg-thinking'))"), false);
+    assert.equal(await evaluate("getComputedStyle(document.querySelector('.status-light.background')).animationName"), "none");
+    assert.ok(!(await evaluate("document.querySelector('.composer-input').placeholder")).startsWith("Working"));
+    await screenshot("chat-background-wait.png");
+
+    window.webContents.send("ui:open-chat", "");
+    await waitFor("!document.querySelector('.transcript')");
+    window.webContents.send("ui:open-chat", session.id);
+    await waitFor("Boolean(document.querySelector('.chat-wait-note.background'))");
+    assert.equal(await evaluate("Boolean(document.querySelector('.status-light.running, .step-spinner'))"), false);
+
+    emit({ kind: "permission", requestId: "allow-build", tool: "Bash", input: { command: "Check dev" }, step: { type: "terminal", label: "Run command", target: "Check dev" } });
+    await waitFor("Boolean(document.querySelector('.chat-wait-note.waiting'))");
+    assert.match(await evaluate("document.querySelector('.chat-wait-note.waiting').textContent"), /Allow or Deny/);
+    assert.equal(await evaluate("Boolean(document.querySelector('.status-light.running, .step-spinner'))"), false);
+    await click("document.querySelector('.chat-wait-note.waiting .mini-btn')");
+    const visible = await evaluate(`(() => {
+      const card = document.querySelector('[data-request-id="allow-build"]');
+      const bounds = card.getBoundingClientRect();
+      const viewport = document.querySelector('.transcript').getBoundingClientRect();
+      return bounds.top >= viewport.top && bounds.bottom <= viewport.bottom;
+    })()`);
+    assert.equal(visible, true, "Show request brings the pending card into view");
+    emit({ kind: "permission_decision", requestId: "allow-build", allowed: true });
+    await waitFor("Boolean(document.querySelector('.run-badge.running'))");
+    showBackground();
+    await waitFor("Boolean(document.querySelector('.run-badge.background'))");
+    session.status = "running";
+    window.webContents.send("sessions:changed");
+    await waitFor("Boolean(document.querySelector('.run-badge.running .status-light.running'))");
+    session.running = false;
+    session.status = "done";
+    emit({ kind: "done", ok: true });
+    await waitFor("Boolean(document.querySelector('.run-badge.done .status-light.done')) && !document.querySelector('.chat-wait-note')");
+    assert.equal(await evaluate("Boolean(document.querySelector('.session-open .status-light.done'))"), true);
+    await screenshot("chat-done.png");
+  });
 
   console.log(results.join("\n"));
   window.destroy();

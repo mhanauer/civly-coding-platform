@@ -67,8 +67,8 @@ export type EngineEvent =
   | { kind: "done"; ok: boolean; summary?: string; tokens?: TokenCount; costUsd?: number }
   | { kind: "filtered"; text: string; original: string }
   // background agents and commands still running (Claude). idle: the reply
-  // has ended and only these keep the run open. Drives the app's check-ins,
-  // not saved.
+  // has ended and only these keep the run open. Drives the app's status
+  // and check-ins, not saved.
   | { kind: "background"; tasks: BackgroundTask[]; idle: boolean };
 
 export interface BackgroundTask {

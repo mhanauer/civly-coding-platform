@@ -34,7 +34,6 @@ import {
   hitModelCapacity,
   hitPlanLimit,
   isLimitError,
-  latestAttempt,
   nextPlanAfterLimit,
   planIsOut,
   untriedModel
@@ -43,6 +42,7 @@ import { allUsage, onUsageChange, recordLimitError, recordUsage, refreshCodex, r
 import { resolveMuseSnapshot, type MuseSnapshotInput } from "./museUsage.ts";
 import { codexRoutingTimedOut } from "./codexRoutingRecovery.ts";
 import { backgroundWatch } from "./backgroundWait.ts";
+import { chatStatus, STOPPED, type ChatStatus } from "./chatStatus.ts";
 import { listSkills, personalSkillDirs, projectSkillDirs } from "./skills.ts";
 import {
   attachedPaths, compareFileStates, compareProjectStates, fileState, listRemoteMacs, loadRemoteCache, projectState,
@@ -88,6 +88,7 @@ interface Session {
   queue: string[];
   // permission requests waiting on Allow / Deny, by request id
   pending: Map<string, { input?: Record<string, unknown>; suggestions?: unknown[] }>;
+  background?: Extract<EngineEvent, { kind: "background" }>;
   // drives the chat list order: most recently active first
   updatedAt: number;
   // keeps a chat's side conversation tabs in the order they were opened
@@ -142,26 +143,6 @@ interface SessionSummary {
   hostOnline?: boolean;
   hostMissing?: boolean;
   transferredTo?: string;
-}
-
-// What the sidebar light shows: working, waiting on a permission answer,
-// needs you (an error, a blocked permission, a hit limit), or finished.
-// "idle" is a new or stopped chat.
-type ChatStatus = "idle" | "running" | "waiting" | "error" | "done";
-
-const STOPPED = "Stopped";
-
-function chatStatus(s: Session): ChatStatus {
-  if (s.running || s.turnActive || s.settling) return s.pending.size > 0 ? "waiting" : "running";
-  const t = s.transcript;
-  const lastUser = t.map((e) => e.kind).lastIndexOf("user");
-  if (lastUser === -1) return "idle";
-  const turn = latestAttempt(t.slice(lastUser + 1));
-  if (turn.some((e) => e.kind === "status" && e.text === STOPPED)) return "idle";
-  if (turn.some((e) => e.kind === "error" || (e.kind === "done" && !e.ok))) return "error";
-  // Older chats may have moved plans before automatic continuation existed.
-  if (turn.some((e) => e.kind === "status" && e.text.startsWith("Plan limit hit"))) return "error";
-  return turn.some((e) => e.kind === "done") ? "done" : "idle";
 }
 
 function summary(s: Session): SessionSummary {
@@ -833,6 +814,11 @@ function besideContext(session: Session): string {
 }
 
 function pushEvent(session: Session, event: EngineEvent): void {
+  if (event.kind === "background") {
+    session.background = event;
+    sendSessions();
+    return;
+  }
   // live reasoning arrives a word at a time; the window shows it as it
   // streams, but only the finished "thinking" event is kept on disk
   if (event.kind === "thinking_delta") {
@@ -868,6 +854,7 @@ function pushEvent(session: Session, event: EngineEvent): void {
   if (event.kind === "done") {
     session.running = false;
     session.pending.clear();
+    session.background = undefined;
   }
   if (OUTPUT_KINDS.has(event.kind)) persistSoon(session);
   else persistChat(session);
@@ -1664,6 +1651,7 @@ function startTurn(
     session.leanNoted = true;
   }
   session.running = true;
+  session.background = undefined;
   // Auto picks per message, from what you typed rather than the notes above
   const picked = session.effort || (EFFORT_LEVELS[session.plan.engine] ? AUTO : "");
   const effort = picked ? resolveEffort(picked, prompt, engineDefaultEffort(session.plan.engine)) : "";
@@ -1709,6 +1697,7 @@ function startTurn(
       // engine's own exit message would only add noise
       if (stalledOnLimit && event.kind === "error") return;
       if (event.kind === "background") {
+        pushEvent(session, event);
         waiting.feed(event.tasks, event.idle);
         return;
       }

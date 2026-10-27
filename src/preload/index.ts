@@ -7,6 +7,7 @@ import type { Settings } from "../main/settings.ts";
 import type { CliStatus } from "../main/cliUpdates.ts";
 import type { Tools } from "../main/leanChats.ts";
 import type { Skill } from "../main/skills.ts";
+import type { ChatStatus } from "../main/chatStatus.ts";
 
 export interface PlanUsage {
   windows: UsageWindow[];
@@ -40,7 +41,7 @@ export interface SessionSummary {
   title: string;
   // true until the first message: plan and folder can still change freely
   empty: boolean;
-  status: "idle" | "running" | "waiting" | "error" | "done";
+  status: ChatStatus;
   queue: string[];
   defaultEffort: string;
   // a side-pane conversation: kept out of the chat list

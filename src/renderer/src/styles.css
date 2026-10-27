@@ -1350,7 +1350,7 @@ button.stop {
   border-color: rgba(78, 201, 138, 0.45);
 }
 
-/* the chat's light: spinner while working, red needs you, green done */
+/* Only active work spins. Questions and background waits use steady dots. */
 .status-light {
   flex: none;
   display: inline-block;
@@ -1369,9 +1369,15 @@ button.stop {
   animation: spin 0.8s linear infinite;
 }
 
-.status-light.error {
+.status-light.error,
+.status-light.waiting {
   background: #e0505c;
   box-shadow: 0 0 0 3px rgba(224, 80, 92, 0.18);
+}
+
+.status-light.background {
+  background: #e5c07b;
+  box-shadow: 0 0 0 3px rgba(229, 192, 123, 0.16);
 }
 
 .status-light.done {
@@ -1898,24 +1904,52 @@ button.stop {
   justify-content: flex-end;
 }
 
-/* waiting on a permission answer: the red light pulses */
-.status-light.pulse {
-  animation: pulse 1.2s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 2px rgba(224, 80, 92, 0.2);
-  }
-  50% {
-    box-shadow: 0 0 0 5px rgba(224, 80, 92, 0.05);
-  }
+.run-badge.waiting,
+.session-wait-label.waiting {
+  color: #f0848d;
 }
 
 .run-badge.waiting {
-  color: #f0848d;
   border-color: rgba(224, 112, 122, 0.5);
+}
+
+.run-badge.background,
+.session-wait-label.background {
+  color: #e5c07b;
+}
+
+.run-badge.background {
+  border-color: rgba(229, 192, 123, 0.45);
+}
+
+.chat-wait-note {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  border: 1px solid rgba(224, 112, 122, 0.5);
+  border-radius: 8px;
+  background: rgba(224, 80, 92, 0.08);
+  color: #f0848d;
+  font-size: 12px;
+}
+
+.chat-wait-note.background {
+  border-color: rgba(229, 192, 123, 0.4);
+  background: rgba(229, 192, 123, 0.06);
+  color: #e5c07b;
+}
+
+.chat-wait-note > div {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.chat-wait-note > div > span {
+  color: #c9baf0;
 }
 
 /* a tool the engine is asking to run: Allow / Always allow / Deny */

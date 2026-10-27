@@ -26,6 +26,16 @@ makes its own API calls against a subscription quota.
 It needs macOS on Apple silicon. Sign-ins open in Terminal and login checks
 read the macOS keychain, so other platforms do not work yet.
 
+Chat indicators show what is happening:
+
+- A spinner means the chat is actively working.
+- Red **Needs your response** means a question or permission request needs
+  an answer. The message box shows a notice with **Show request** to find it.
+- Amber **Waiting on background work** means a command or helper is still
+  running. The chat continues when it finishes.
+- Green **Done** means the reply has finished. Red **Needs attention** means
+  an error or blocked action needs a look.
+
 Each release is signed with a Developer ID and notarized by Apple. To check a
 download against the `.sha256` file published beside it:
 

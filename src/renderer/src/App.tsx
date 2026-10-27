@@ -5,6 +5,7 @@ import type { Tools } from "../../main/leanChats.ts";
 import type { BrowserCheck } from "../../main/browserChecks.ts";
 import type { Settings } from "../../main/settings.ts";
 import type { CliStatus } from "../../main/cliUpdates.ts";
+import type { ChatStatus } from "../../main/chatStatus.ts";
 import markUrl from "../assets/civly-mark.png";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -208,8 +209,6 @@ interface SessionSummary {
   transferredTo?: string;
 }
 
-type ChatStatus = "idle" | "running" | "waiting" | "error" | "done";
-
 type PlanUsage = Awaited<ReturnType<typeof window.hub.usage>>[string];
 
 // A Claude or ChatGPT subscription added in Accounts signs in on its own.
@@ -382,15 +381,15 @@ function CliVersions(): JSX.Element {
   );
 }
 
-// The chat's light: a spinner while it works, red when it needs you (an
-// error, a blocked permission, a hit limit), green when it finished. A new
-// or stopped chat keeps its plan color.
+// Only active work spins. Questions and background waits stay still so
+// an open engine process cannot look like a reply is still being written.
 function StatusLight({ status, color }: { status: ChatStatus; color: string }): JSX.Element {
-  if (status === "running") return <span className="status-light running" title="Working" />;
-  if (status === "waiting") return <span className="status-light error pulse" title="Waiting for your permission or answer" />;
+  if (status === "running") return <span className="status-light running" role="img" aria-label="Working" title="Working" />;
+  if (status === "waiting") return <span className="status-light waiting" role="img" aria-label="Needs your response" title="Needs your response" />;
+  if (status === "background") return <span className="status-light background" role="img" aria-label="Waiting on background work" title="Waiting on background work" />;
   if (status === "error")
-    return <span className="status-light error" title="Needs attention: an error or a blocked permission" />;
-  if (status === "done") return <span className="status-light done" title="Done" />;
+    return <span className="status-light error" role="img" aria-label="Needs attention" title="Needs attention: an error or a blocked permission" />;
+  if (status === "done") return <span className="status-light done" role="img" aria-label="Done" title="Done" />;
   return <span className="dot" style={{ background: color }} />;
 }
 
@@ -398,7 +397,8 @@ const STATUS_BADGE: Record<ChatStatus, string> = {
   idle: "",
   running: "Working",
   // a permission request or one of Claude's questions
-  waiting: "Needs you",
+  waiting: "Needs your response",
+  background: "Waiting on background work",
   error: "Needs attention",
   done: "Done"
 };
@@ -1091,7 +1091,7 @@ function PermissionCard({
       ? "perm-result muted"
       : "perm-result";
   return (
-    <div className={answered ? "perm-card done" : "perm-card"}>
+    <div className={answered ? "perm-card done" : "perm-card"} data-request-id={ev.requestId}>
       <div className="perm-head">
         <StepIcon kind={step?.type ?? "other"} />
         <span className="perm-title">
@@ -1200,7 +1200,7 @@ function QuestionCard({
         : "Not answered (the reply ended)";
   if (status) {
     return (
-      <div className="perm-card done">
+      <div className="perm-card done" data-request-id={ev.requestId}>
         <div className="perm-head">
           <StepIcon kind="other" />
           <span className="perm-title">Claude asked</span>
@@ -1225,7 +1225,7 @@ function QuestionCard({
     );
   }
   return (
-    <div className="perm-card">
+    <div className="perm-card" data-request-id={ev.requestId}>
       <div className="perm-head">
         <StepIcon kind="other" />
         <span className="perm-title">Claude has {questions.length > 1 ? `${questions.length} questions` : "a question"}</span>
@@ -1350,6 +1350,7 @@ function Composer({
   onSteer,
   onQueue,
   onAnswerQuestion,
+  waitStatus,
   busyMode,
   onBusyModeChange,
   usage,
@@ -1387,6 +1388,7 @@ function Composer({
   // given while Claude waits on a question: Enter sends the text as the
   // answer, whatever the mode (a queued answer would wait forever)
   onAnswerQuestion?: () => void;
+  waitStatus?: "waiting" | "background";
   busyMode?: "steer" | "queue";
   onBusyModeChange?: (m: "steer" | "queue") => void;
   usage?: Record<string, PlanUsage>;
@@ -1399,6 +1401,7 @@ function Composer({
   const plan = plans.find((p) => p.id === planId);
   const models = plan?.models?.length ? plan.models : ["default"];
   const efforts = effortsFor(plan?.engine ?? "");
+  const activityText = waitStatus === "background" ? "Waiting on background work" : "Working";
 
   // The box grows with what you type so the whole message stays in view,
   // up to 60% of the window; past that it scrolls. Sending shrinks it back.
@@ -1437,11 +1440,13 @@ function Composer({
             busy
               ? onAnswerQuestion
                 ? "Claude is waiting on its question: pick above, or type your answer and press Enter"
-                : busyMode === "queue" && onQueue
-                  ? "Working... press Enter to queue your next message"
-                  : onSteer
-                    ? "Working... press Enter to redirect it with a new message"
-                    : "Working..."
+                : waitStatus === "waiting"
+                  ? "Choose Allow or Deny on the request above"
+                  : busyMode === "queue" && onQueue
+                    ? `${activityText}... press Enter to queue your next message`
+                    : onSteer
+                      ? `${activityText}... press Enter to redirect it with a new message`
+                      : `${activityText}...`
               : "Message (Enter to send, Shift+Enter for newline)"
           }
           disabled={readOnly || (busy && !onSteer && !onAnswerQuestion)}
@@ -1771,6 +1776,11 @@ function ChatView({
   // Only the running reply can still take an answer; a request left
   // unanswered by an earlier reply stays closed while a later one runs.
   const answerable = (index: number): boolean => busy && !readOnly && session.hostOnline !== false && index > lastTurnBoundary;
+  const working = busy && status === "running";
+  const openRequest = items.findLast(
+    (it): it is Extract<FlowItem, { type: "permission" }> =>
+      it.type === "permission" && !it.decision && answerable(it.index)
+  );
   // the question the running reply waits on; the message box answers it
   const openQuestion = items.findLast(
     (it): it is Extract<FlowItem, { type: "permission" }> =>
@@ -1795,7 +1805,7 @@ function ChatView({
           <span className="header-spacer" />
           {STATUS_BADGE[status] ? (
             <span className={`run-badge ${status}`}>
-              {status === "running" ? <span className="status-light running" /> : null}
+              <StatusLight status={status} color={session.color} />
               {STATUS_BADGE[status]}
             </span>
           ) : null}
@@ -1832,7 +1842,7 @@ function ChatView({
         ) : (
           (() => {
             const lastUserIdx = merged.map((e) => e.kind).lastIndexOf("user");
-            const showThinking = busy && isThinking(events);
+            const showThinking = working && isThinking(events);
             const lastContentIdx = merged.reduce(
               (acc, ev, i) =>
                 ev.kind === "text" ||
@@ -1857,7 +1867,7 @@ function ChatView({
               (lastItem?.type === "explore" &&
                 lastItem.steps.some((v) => v.expectsResult && !v.result)) ||
               (lastMerged?.kind === "text" && Boolean(lastMerged.streaming));
-            const showWorking = busy && !showThinking && !activityShown;
+            const showWorking = working && !showThinking && !activityShown;
             const turnHasFiltered = new Map<number, string>();
             const turnOriginal = new Map<number, string>();
             const lastTextIndex = new Map<number, number>();
@@ -1911,16 +1921,16 @@ function ChatView({
                         key={item.index}
                         text={item.ev.text}
                         ms={item.ev.ms}
-                        live={Boolean(item.ev.live) && busy}
+                        live={Boolean(item.ev.live) && working}
                         startedAt={item.ev.startedAt}
                       />
                     );
                   }
                   if (item.type === "explore") {
-                    return <ExploreRow key={item.index} steps={item.steps} busy={busy} />;
+                    return <ExploreRow key={item.index} steps={item.steps} busy={working} />;
                   }
                   if (item.type === "step") {
-                    return <StepRow key={item.index} view={item.view} busy={busy} />;
+                    return <StepRow key={item.index} view={item.view} busy={working} />;
                   }
                   const ev = item.ev;
                   const i = item.index;
@@ -1958,7 +1968,7 @@ function ChatView({
                   // Completed messages always render in full. Only actual
                   // engine deltas stream, so opening a chat or sending again
                   // cannot replay a previously received reply.
-                  if (ev.kind === "text" && ev.streaming && i === lastContentIdx && i > lastTurnBoundary && busy) {
+                  if (ev.kind === "text" && ev.streaming && i === lastContentIdx && i > lastTurnBoundary && working) {
                     return (
                       <div className="msg msg-text" key={i}>
                         <ChatMarkdown text={ev.text} />
@@ -1987,6 +1997,32 @@ function ChatView({
         </div>
       ) : null}
       <div className="composer-wrap">
+        {status === "waiting" || status === "background" ? (
+          <div className={`chat-wait-note ${status}`} role="status">
+            <StatusLight status={status} color={session.color} />
+            <div>
+              <strong>{STATUS_BADGE[status]}</strong>
+              <span>
+                {status === "background"
+                  ? "The chat will continue when the work finishes. You can leave it running."
+                  : openQuestion
+                    ? "Answer the question above, or type your answer below."
+                    : "Choose Allow or Deny on the request above."}
+              </span>
+            </div>
+            {status === "waiting" && openRequest ? (
+              <button className="mini-btn" onClick={() => {
+                stickRef.current = false;
+                setShownItems(items.length);
+                requestAnimationFrame(() => {
+                  transcriptRef.current?.querySelector(`[data-request-id="${CSS.escape(openRequest.ev.requestId)}"]`)?.scrollIntoView({ block: "center" });
+                });
+              }}>
+                Show request
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         {session.queue.length > 0 ? (
           <div className="queue-list">
             {session.queue.map((q, qi) => (
@@ -2042,6 +2078,7 @@ function ChatView({
             onSend();
           }}
           busy={busy}
+          waitStatus={status === "waiting" || status === "background" ? status : undefined}
           onCancel={() => void window.hub.cancel(session.id)}
           onSteer={
             onSteer
@@ -2799,10 +2836,10 @@ export default function App() {
     return () => document.removeEventListener("mousedown", close);
   }, [chatMenu]);
 
-  // live busy flags land before the summary refresh, so they win
-  // (waiting on a permission answer outranks both)
+  // A live CLI can be waiting for an answer or a background job. Keep
+  // those states even though its process is still running.
   const statusOf = (s: SessionSummary): ChatStatus =>
-    s.status === "waiting" ? "waiting" : s.running || busy[s.id] ? "running" : s.status;
+    s.status === "waiting" || s.status === "background" ? s.status : s.running || busy[s.id] ? "running" : s.status;
 
   // Inline rename in the sidebar. Enter and click-away both save through the
   // input's blur, so a name is only ever committed once; Escape cancels.
@@ -3308,6 +3345,8 @@ export default function App() {
             <span className="session-sub">
               {s.planLabel} · {s.model} · {s.hostLabel ?? "This Mac"}
               {statusOf(s) === "running" ? " · working" : ""}
+              {statusOf(s) === "waiting" ? <span className="session-wait-label waiting"> · needs your response</span> : null}
+              {statusOf(s) === "background" ? <span className="session-wait-label background"> · background work</span> : null}
               {statusOf(s) === "error" ? " · needs attention" : ""}
               {s.hostId && s.hostOnline === false ? s.hostLabel === "Removed Mac" ? " · unpaired" : s.hostMissing ? " · chat missing" : " · reconnecting" : ""}
             </span>
