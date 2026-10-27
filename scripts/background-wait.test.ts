@@ -119,18 +119,19 @@ test("the app shows the wait once and checks in each interval while the chat is 
   assert.equal(notes.length, 2);
 });
 
-test("check-ins stop after an hour's worth", (t) => {
+test("check-ins come every 5 minutes and stop after two hours' worth", (t) => {
+  assert.match(waitGuide("zsh"), /every 5 minutes/);
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const notes: string[] = [];
   const statuses: string[] = [];
   const watch = backgroundWatch({ say: (text) => (notes.push(text), true), status: (s) => statuses.push(s), intervalMs: 1000, now: () => 0 });
   const tasks = [task("b1", 0)];
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 30; i++) {
     watch.feed(tasks, true);
     t.mock.timers.tick(1000);
     watch.feed(tasks, false);
   }
-  assert.equal(notes.length, 6);
+  assert.equal(notes.length, 24);
   assert.match(statuses.at(-1)!, /last check-in/);
 });
 

@@ -32,7 +32,8 @@ Chat indicators show what is happening:
 - Red **Needs your response** means a question or permission request needs
   an answer. The message box shows a notice with **Show request** to find it.
 - Amber **Waiting on background work** means a command or helper is still
-  running. The chat continues when it finishes.
+  running. The chat continues when it finishes, and posts a one-line update
+  every 5 minutes until then.
 - Green **Done** means the reply has finished. Red **Needs attention** means
   an error or blocked action needs a look.
 

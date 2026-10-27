@@ -5,8 +5,9 @@ import { CHECK_IN_MINUTES } from "./engines/claude.ts";
 // keeps the chat open and picks it back up when that work exits. A wait
 // that can never exit (a loop whose check never matches) would hold the
 // chat open with nobody told, so while the chat waits the app shows what on,
-// and every CHECK_IN_MINUTES asks it to check directly, for up to an hour.
-const MAX_CHECK_INS = 6;
+// and every CHECK_IN_MINUTES asks it to check directly and say where things
+// stand, for up to two hours: the longest a background command may run.
+const MAX_CHECK_INS = (2 * 60) / CHECK_IN_MINUTES;
 
 const minutes = (ms: number): number => Math.max(1, Math.round(ms / 60_000));
 
@@ -21,7 +22,7 @@ export function checkInNote(tasks: BackgroundTask[], now: number): string {
   return (
     `[Note from the app: your reply has ended, and this chat is still open only for background work: ${list}. ` +
     "Check directly whether what it waits for is done. If it is, or if the wait cannot end on its own, stop it with TaskStop and carry on with my request. " +
-    "If it is still rightly waiting, say in one short line what it waits for and when it should end, then end your turn.]"
+    "If it is still rightly waiting, give me a one-line update: where it stands, what it waits for and when it should end, then end your turn.]"
   );
 }
 

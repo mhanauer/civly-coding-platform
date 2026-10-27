@@ -94,7 +94,7 @@ const OUTPUT_LIMIT = 1500;
 
 // How often the app asks a chat to check on background work it is waiting
 // for (index.ts); the wait guide below tells the model so.
-export const CHECK_IN_MINUTES = 10;
+export const CHECK_IN_MINUTES = 5;
 
 // Appended to Claude Code's system prompt. A wait that cannot end keeps the
 // chat open with nobody told: a loop that watched "the newest run" while
@@ -110,7 +110,7 @@ export function waitGuide(shell = basename(process.env.SHELL ?? "")): string {
     "So make every wait able to end on its own: watch one fixed thing (a run ID, not the newest run); stop on success, failure, cancellation " +
     "and a time limit a little past how long it normally takes; print one status line per check; and keep errors visible." +
     zsh +
-    ` Tell the user what you are waiting for and about how long it takes. The app asks you to check on background work every ${CHECK_IN_MINUTES} minutes.`
+    ` Tell the user what you are waiting for and about how long it takes. The app asks you every ${CHECK_IN_MINUTES} minutes to check on background work and give the user a one-line update.`
   );
 }
 
