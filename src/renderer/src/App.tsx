@@ -201,12 +201,6 @@ interface SessionSummary {
   // the chat a side conversation belongs to; "" is the new-task screen
   parentId?: string;
   createdAt: number;
-  updatedAt: number;
-  hostId?: string;
-  hostLabel?: string;
-  hostOnline?: boolean;
-  hostMissing?: boolean;
-  transferredTo?: string;
 }
 
 type PlanUsage = Awaited<ReturnType<typeof window.hub.usage>>[string];
@@ -1355,7 +1349,6 @@ function Composer({
   onBusyModeChange,
   usage,
   disabled,
-  readOnly,
   branch,
   onBranchChange
 }: {
@@ -1393,7 +1386,6 @@ function Composer({
   onBusyModeChange?: (m: "steer" | "queue") => void;
   usage?: Record<string, PlanUsage>;
   disabled?: boolean;
-  readOnly?: boolean;
   // the folder's git branches; omitted for non-repo folders
   branch?: { current: string; branches: string[] };
   onBranchChange?: (b: string) => void;
@@ -1429,7 +1421,6 @@ function Composer({
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
-              if (readOnly) return;
               if (!busy) onSend();
               else if (onAnswerQuestion && input.trim()) onAnswerQuestion();
               else if (busyMode === "queue" && onQueue && input.trim()) onQueue();
@@ -1449,15 +1440,15 @@ function Composer({
                       : `${activityText}...`
               : "Message (Enter to send, Shift+Enter for newline)"
           }
-          disabled={readOnly || (busy && !onSteer && !onAnswerQuestion)}
+          disabled={busy && !onSteer && !onAnswerQuestion}
           rows={2}
         />
         {busy ? (
-          <button className="stop" onClick={onCancel} disabled={readOnly}>
+          <button className="stop" onClick={onCancel}>
             Stop
           </button>
         ) : (
-          <button className="send-btn" onClick={() => onSend()} disabled={!input.trim() || readOnly}>
+          <button className="send-btn" onClick={() => onSend()} disabled={!input.trim()}>
             Send
           </button>
         )}
@@ -1646,7 +1637,6 @@ function ChatView({
   usage,
   branch,
   onBranchChange,
-  readOnly,
   busyMode,
   onBusyModeChange,
   input,
@@ -1675,7 +1665,6 @@ function ChatView({
   usage: Record<string, PlanUsage>;
   branch?: { current: string; branches: string[] };
   onBranchChange: (b: string) => void;
-  readOnly?: boolean;
   busyMode: "steer" | "queue";
   onBusyModeChange: (m: "steer" | "queue") => void;
   input: string;
@@ -1775,7 +1764,7 @@ function ChatView({
   const lastTurnBoundary = merged.findLastIndex((e) => e.kind === "user" || e.kind === "done");
   // Only the running reply can still take an answer; a request left
   // unanswered by an earlier reply stays closed while a later one runs.
-  const answerable = (index: number): boolean => busy && !readOnly && session.hostOnline !== false && index > lastTurnBoundary;
+  const answerable = (index: number): boolean => busy && index > lastTurnBoundary;
   const working = busy && status === "running";
   const openRequest = items.findLast(
     (it): it is Extract<FlowItem, { type: "permission" }> =>
@@ -1801,7 +1790,6 @@ function ChatView({
           <span className="dot" style={{ background: session.color }} />
           <strong>{session.planLabel}</strong>
           <span className="cwd">{session.cwd}</span>
-          <span className="host-chip">{session.hostLabel ?? "This Mac"}{session.hostId && session.hostOnline === false ? session.hostLabel === "Removed Mac" ? " · unpaired" : session.hostMissing ? " · chat missing" : " · reconnecting" : ""}</span>
           <span className="header-spacer" />
           {STATUS_BADGE[status] ? (
             <span className={`run-badge ${status}`}>
@@ -1812,13 +1800,6 @@ function ChatView({
           {headerExtra}
         </div>
       </header>
-      {session.hostId ? (
-        <div className="remote-note">
-          The CLI, project files, skills and browser are on {session.hostLabel}.
-          Browser sign-ins and checks need the Platform window on that Mac.
-        </div>
-      ) : null}
-      {session.transferredTo ? <div className="remote-note">This original chat continued on {session.transferredTo}. Open the new chat to send a message.</div> : null}
       <div
         className="transcript"
         ref={transcriptRef}
@@ -2100,8 +2081,7 @@ function ChatView({
           busyMode={busyMode}
           onBusyModeChange={onBusyModeChange}
           usage={usage}
-          disabled={busy || readOnly || Boolean(session.transferredTo)}
-          readOnly={readOnly || Boolean(session.transferredTo)}
+          disabled={busy}
           branch={branch}
           onBranchChange={onBranchChange}
         />
@@ -2149,12 +2129,6 @@ function checkSite(check: BrowserCheck): string {
 
 export default function App() {
   const [plans, setPlans] = useState<PlanConfig[]>([]);
-  const [remoteMacs, setRemoteMacs] = useState<Awaited<ReturnType<typeof window.hub.remoteMacs>>>([]);
-  const [runHostId, setRunHostId] = useState(() => localStorage.getItem("runHostId") ?? "local");
-  const [newMac, setNewMac] = useState({ label: "", sshHost: "" });
-  const [remoteError, setRemoteError] = useState("");
-  const [pairingMac, setPairingMac] = useState(false);
-  const [continuingId, setContinuingId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [transcripts, setTranscripts] = useState<Record<string, EngineEvent[]>>({});
@@ -2224,8 +2198,7 @@ export default function App() {
     devBranch: false,
     zcodeProjects: false,
     leanChats: false,
-    updateClis: false,
-    acceptRemoteChats: false
+    updateClis: false
   });
   // a newer build is installed; waiting = restart once no chat is working
   const [update, setUpdate] = useState<{ ready: boolean; waiting: boolean }>({ ready: false, waiting: false });
@@ -2278,23 +2251,6 @@ export default function App() {
     return list;
   }, []);
 
-  const refreshRemoteMacs = useCallback(async (): Promise<void> => {
-    const list = await window.hub.remoteMacs();
-    setRemoteMacs(list);
-  }, []);
-
-  useEffect(() => {
-    if (runHostId === "local") return;
-    const remote = remoteMacs.find((mac) => mac.id === runHostId);
-    if (!remote?.online || remote.plans.some((plan) => plan.id === planId)) return;
-    const first = remote.plans.find((plan) => plan.installed && plan.loggedIn);
-    if (first) {
-      setPlanId(first.id);
-      setModel(first.models?.[0] ?? "default");
-      setEffort(defaultEffort(first.engine));
-    }
-  }, [runHostId, remoteMacs, planId]);
-
   useEffect(() => {
     void window.hub.usage().then(setUsage);
     const offUsage = window.hub.onUsageUpdate((all) => setUsage({ ...all }));
@@ -2302,27 +2258,10 @@ export default function App() {
     const offChecks = window.hub.onBrowserChecks(setBrowserChecks);
     // a queued turn starting or a turn ending in the main process
     const offSessions = window.hub.onSessionsChanged(() => void refreshSessions());
-    const offRemote = window.hub.onRemoteHostsChanged(() => void refreshRemoteMacs());
-    const offSnapshots = window.hub.onSessionSnapshot(({ sessionId, offset, events }) => {
-      setTranscripts((prev) => {
-        const current = prev[sessionId];
-        if (!current) return prev;
-        if (offset === 0) return { ...prev, [sessionId]: events };
-        if (offset === current.length) return { ...prev, [sessionId]: [...current, ...events] };
-        // A local optimistic echo or a delayed poll changed the cursor.
-        // Read the host-backed cache once so no output is skipped or doubled.
-        void window.hub.transcript(sessionId).then((full) => setTranscripts((latest) => ({ ...latest, [sessionId]: full })));
-        return prev;
-      });
-      if (events.some((event) => event.kind === "done" || event.kind === "error"))
-        setBusy((prev) => ({ ...prev, [sessionId]: false }));
-    });
     return () => {
       offUsage();
       offChecks();
       offSessions();
-      offRemote();
-      offSnapshots();
     };
   }, [refreshSessions]);
 
@@ -2359,7 +2298,6 @@ export default function App() {
   useEffect(() => {
     const bootstrap = async (): Promise<void> => {
       void window.hub.getSettings().then(setSettings).catch(() => undefined);
-      void refreshRemoteMacs();
       EFFORT_DEFAULTS = await window.hub.effortDefaults();
       const ps = await window.hub.listPlans();
       setPlans(ps);
@@ -2474,18 +2412,6 @@ export default function App() {
   }, []);
 
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
-  const plansForRun = runHostId === "local" ? plans : remoteMacs.find((m) => m.id === runHostId)?.plans ?? [];
-  const selectRunHost = (id: string): void => {
-    setRunHostId(id);
-    localStorage.setItem("runHostId", id);
-    const choices = id === "local" ? plans : remoteMacs.find((m) => m.id === id)?.plans ?? [];
-    const first = choices.find((p) => p.installed && p.loggedIn) ?? choices.find((p) => p.installed);
-    if (first) {
-      setPlanId(first.id);
-      setModel(first.models?.[0] ?? "default");
-      setEffort(defaultEffort(first.engine));
-    }
-  };
   const busyOf = (id: string): boolean =>
     Boolean(sessions.find((s) => s.id === id)?.running || busy[id]);
 
@@ -2510,7 +2436,7 @@ export default function App() {
   }, [activeSession, cwd, branchInfo]);
 
   const onPlanChange = (id: string): void => {
-    const plan = plansForRun.find((p) => p.id === id);
+    const plan = plans.find((p) => p.id === id);
     setPlanId(id);
     setModel(plan?.models?.[0] ?? "default");
     setEffort(defaultEffort(plan?.engine ?? ""));
@@ -2529,8 +2455,7 @@ export default function App() {
         cwd: folder,
         model: model || "default",
         effort,
-        fullAccess,
-        hostId: runHostId === "local" ? undefined : runHostId
+        fullAccess
       });
       if (res.error || !res.sessionId) {
         setBanner(res.error ?? "Could not start a chat");
@@ -2577,8 +2502,7 @@ export default function App() {
       cwd: cwd.trim(),
       model: model || "default",
       effort,
-      fullAccess,
-      hostId: runHostId === "local" ? undefined : runHostId
+      fullAccess
     });
     if (res.error || !res.sessionId) {
       setBanner(res.error ?? "Could not create session");
@@ -2860,8 +2784,7 @@ export default function App() {
   };
 
   const deleteChat = async (id: string): Promise<void> => {
-    const result = await window.hub.deleteChat(id);
-    if (result.error) { setBanner(result.error); return; }
+    await window.hub.deleteChat(id);
     if (draftsRef.current?.[id]) {
       delete draftsRef.current[id];
       storeDrafts(DRAFTS_KEY, draftsRef.current);
@@ -3007,7 +2930,6 @@ export default function App() {
   // The pane shows the open chat's own side conversations, never another
   // chat's, next to the terminal and browser tabs.
   const sideKey = activeId ?? "";
-  const remoteContext = Boolean(activeSession?.hostId || (!activeSession && runHostId !== "local"));
   const newTabId = `new:${sideKey}`;
   const shownTabs: ShownTab[] = [
     ...sessions
@@ -3015,17 +2937,13 @@ export default function App() {
       .sort((a, b) => a.createdAt - b.createdAt)
       .map((session) => ({ id: session.id, kind: "chat" as const, session })),
     ...(sideNewOpen[sideKey] ? [{ id: newTabId, kind: "chat" as const, session: null }] : []),
-    ...paneTabs.filter(() => !remoteContext)
+    ...paneTabs
   ];
   const activePane = shownTabs.find((t) => t.id === activePaneIds[sideKey]) ?? shownTabs[0] ?? null;
   const showPane = (id: string): void => setActivePaneIds((prev) => ({ ...prev, [sideKey]: id }));
 
   const openPane = (kind: PaneKind): void => {
     setPaneChooser(false);
-    if (remoteContext && kind !== "chat") {
-      setBanner("Terminal and browser tabs run on this Mac. Open the Platform window on the host Mac to use them there.");
-      return;
-    }
     // always a new side conversation; one not started yet is reused
     if (kind === "chat") {
       setSideNewOpen((prev) => ({ ...prev, [sideKey]: true }));
@@ -3125,10 +3043,7 @@ export default function App() {
           filter: activeSession.filter
         }
       : { planId, model, effort, fullAccess, filter: true });
-  const sideHostPlans = activeSession?.hostId
-    ? remoteMacs.find((m) => m.id === activeSession.hostId)?.plans ?? []
-    : plansForRun;
-  const sidePlan = sideHostPlans.find((p) => p.id === sidePicked.planId);
+  const sidePlan = plans.find((p) => p.id === sidePicked.planId);
   const sideStart: SessionSummary = {
     id: "",
     planId: sidePicked.planId,
@@ -3150,15 +3065,11 @@ export default function App() {
     defaultEffort: "",
     side: true,
     parentId: sideKey,
-    createdAt: 0,
-    updatedAt: 0,
-    hostId: activeSession?.hostId ?? (runHostId === "local" ? undefined : runHostId),
-    hostLabel: activeSession?.hostLabel ?? remoteMacs.find((m) => m.id === runHostId)?.label,
-    hostOnline: activeSession?.hostOnline ?? remoteMacs.find((m) => m.id === runHostId)?.online
+    createdAt: 0
   };
   const pickSide = (patch: SessionPatch): void => {
     const key = sideKey;
-    const plan = patch.planId !== undefined ? sideHostPlans.find((p) => p.id === patch.planId) : undefined;
+    const plan = patch.planId !== undefined ? plans.find((p) => p.id === patch.planId) : undefined;
     // a new plan starts on its own first model and usual effort, as on the
     // new-task screen
     const reset = plan ? { model: plan.models?.[0] ?? "default", effort: defaultEffort(plan.engine) } : {};
@@ -3186,8 +3097,7 @@ export default function App() {
         filter: sidePicked.filter,
         tools: sidePicked.tools,
         side: true,
-        parentId: key,
-        hostId: activeSession?.hostId ?? (runHostId === "local" ? undefined : runHostId)
+        parentId: key
       });
       if (created.error || !created.sessionId) {
         box.setError(created.error ?? "Could not start the side conversation");
@@ -3234,11 +3144,10 @@ export default function App() {
       status={statusOf(session)}
       events={transcripts[session.id] ?? []}
       busy={busyOf(session.id)}
-      plans={session.hostId ? remoteMacs.find((m) => m.id === session.hostId)?.plans ?? plans : plans}
+      plans={plans}
       usage={usage}
-      branch={session.hostId ? undefined : branchInfo[session.cwd]}
-      onBranchChange={(b) => { if (!session.hostId) void switchBranch(session.cwd, b); }}
-      readOnly={Boolean(session.transferredTo || (session.hostId && session.hostOnline === false))}
+      branch={branchInfo[session.cwd]}
+      onBranchChange={(b) => void switchBranch(session.cwd, b)}
       busyMode={busyMode}
       onBusyModeChange={(m) => {
         setBusyMode(m);
@@ -3281,20 +3190,6 @@ export default function App() {
     if (!q) return true;
     return [s.title, s.planLabel, s.model, s.cwd].some((v) => v.toLowerCase().includes(q));
   });
-
-  const continueChatOn = async (id: string, destinationId: string): Promise<void> => {
-    setChatMenu(null);
-    setContinuingId(id);
-    setBanner("Waiting for this turn to finish, then checking the project on both Macs...");
-    try {
-      const result = await window.hub.continueOnMac(id, destinationId);
-      if (result.error) { setBanner(result.error); return; }
-      if (!result.sessionId) { setBanner("Could not create the continuation chat."); return; }
-      await refreshSessions();
-      setActiveId(result.sessionId);
-      setBanner("This chat starts a new CLI session with a recap when you send the next message.");
-    } finally { setContinuingId(null); }
-  };
 
   // one chat row, used under its project and in search results
   const renderSessionItem = (s: SessionSummary): JSX.Element => (
@@ -3343,12 +3238,11 @@ export default function App() {
           <span className="session-meta">
             <span className="session-title">{s.title || "New chat"}</span>
             <span className="session-sub">
-              {s.planLabel} · {s.model} · {s.hostLabel ?? "This Mac"}
+              {s.planLabel} · {s.model}
               {statusOf(s) === "running" ? " · working" : ""}
               {statusOf(s) === "waiting" ? <span className="session-wait-label waiting"> · needs your response</span> : null}
               {statusOf(s) === "background" ? <span className="session-wait-label background"> · background work</span> : null}
               {statusOf(s) === "error" ? " · needs attention" : ""}
-              {s.hostId && s.hostOnline === false ? s.hostLabel === "Removed Mac" ? " · unpaired" : s.hostMissing ? " · chat missing" : " · reconnecting" : ""}
             </span>
           </span>
         </button>
@@ -3377,23 +3271,6 @@ export default function App() {
           >
             Rename
           </button>
-          {!s.transferredTo && (remoteMacs.length > 0 || s.hostId) ? (
-            <>
-              <span className="chat-menu-label">Continue on another Mac</span>
-              {s.hostId ? (
-                <button disabled={Boolean(continuingId)} onClick={() => void continueChatOn(s.id, "local")}>
-                  This Mac
-                </button>
-              ) : null}
-              {remoteMacs.filter((m) => m.id !== s.hostId).map((mac) => (
-                <button key={mac.id} disabled={!mac.online || Boolean(continuingId)}
-                  title={mac.online ? "Check the project and continue after this turn" : "Mac is offline"}
-                  onClick={() => void continueChatOn(s.id, mac.id)}>
-                  {mac.label}{mac.online ? "" : " (offline)"}
-                </button>
-              ))}
-            </>
-          ) : null}
           <button
             className="danger"
             onClick={() => {
@@ -3498,41 +3375,6 @@ export default function App() {
                 click Update.
               </span>
             </label>
-            <div className="remote-settings">
-              <strong>Remote Macs</strong>
-              <p>Run chats on a Mac mini or Studio through SSH. Install and open this app on that Mac, enable “Accept remote chats” there, and use an SSH host already trusted by this MacBook.</p>
-              <label className="setting-row">
-                <input type="checkbox" checked={settings.acceptRemoteChats}
-                  onChange={(e) => void changeSetting({ acceptRemoteChats: e.target.checked })} />
-                <span><strong>Accept remote chats on this Mac</strong>Serves chats through a private socket for this Mac account. No public port opens.</span>
-              </label>
-              <div className="remote-add-row">
-                <input aria-label="Mac name" value={newMac.label} placeholder="Mac Studio"
-                  onChange={(e) => setNewMac((m) => ({ ...m, label: e.target.value }))} />
-                <input aria-label="SSH host" value={newMac.sshHost} placeholder="mac-studio"
-                  onChange={(e) => setNewMac((m) => ({ ...m, sshHost: e.target.value }))} />
-                <button className="mini-btn" disabled={pairingMac || !newMac.label.trim() || !newMac.sshHost.trim()}
-                  onClick={() => void (async () => {
-                    setPairingMac(true);
-                    setRemoteError("");
-                    try {
-                      const result = await window.hub.addRemoteMac(newMac.label, newMac.sshHost);
-                      if (result.error) setRemoteError(result.error);
-                      else { setNewMac({ label: "", sshHost: "" }); await refreshRemoteMacs(); }
-                    } finally { setPairingMac(false); }
-                  })()}>{pairingMac ? "Connecting..." : "Pair"}</button>
-              </div>
-              {remoteError ? <div className="account-error">{remoteError}</div> : null}
-              {remoteMacs.map((mac) => (
-                <div className="remote-mac-row" key={mac.id}>
-                  <span>{mac.label} <small>{mac.sshHost} · {mac.online ? "available" : "offline"}</small></span>
-                  <button className="mini-btn" onClick={() => void window.hub.removeRemoteMac(mac.id).then(() => {
-                    if (runHostId === mac.id) selectRunHost("local");
-                    void refreshRemoteMacs();
-                  })}>Remove</button>
-                </div>
-              ))}
-            </div>
             <CliVersions />
           </div>
         </div>
@@ -3562,7 +3404,6 @@ export default function App() {
               subscription you add signs in on its own and uses the same
               instructions, rules, skills and settings as your main account.
             </div>
-            <div className="side-label" style={{ padding: 0 }}>This Mac</div>
             {plans.filter((p) => p.installed).length === 0 ? (
               <div className="side-empty">No installed plans</div>
             ) : (
@@ -3705,26 +3546,6 @@ export default function App() {
                   );
                 })
             )}
-            {remoteMacs.map((mac) => (
-              <div key={mac.id}>
-                <div className="side-label" style={{ padding: 0 }}>{mac.label}</div>
-                {!mac.online ? (
-                  <div className="plans-hint">Offline</div>
-                ) : mac.plans.filter((p) => p.installed).length === 0 ? (
-                  <div className="plans-hint">No installed plans</div>
-                ) : mac.plans.filter((p) => p.installed).map((p) => (
-                  <div className="usage-plan" key={p.id}>
-                    <div className="usage-plan-head">
-                      <span className="dot" style={{ background: p.color }} />
-                      {p.label}
-                      <span className="usage-actions">
-                        <span className="usage-note">{p.loggedIn ? "Signed in" : `Sign in on ${mac.label}`}</span>
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ))}
             <div className="side-label" style={{ padding: 0 }}>
               Browser
             </div>
@@ -3894,18 +3715,6 @@ export default function App() {
             Skills
           </button>
         </div>
-
-        {remoteMacs.length > 0 ? (
-          <label className="run-on-row">
-            <span>New chats run on</span>
-            <select value={runHostId} onChange={(e) => selectRunHost(e.target.value)}>
-              <option value="local">This Mac</option>
-              {remoteMacs.map((mac) => (
-                <option key={mac.id} value={mac.id} disabled={!mac.online}>{mac.label}{mac.online ? "" : " (offline)"}</option>
-              ))}
-            </select>
-          </label>
-        ) : null}
 
         <input
           className="search"
@@ -4162,20 +3971,9 @@ export default function App() {
               <div className="welcome-folder" title={cwd || "home folder"}>
                 Folder: {cwd || "home folder"}
               </div>
-              {remoteMacs.length > 0 ? (
-                <label className="run-on-row welcome-run-on">
-                  <span>Run on</span>
-                  <select value={runHostId} onChange={(e) => selectRunHost(e.target.value)}>
-                    <option value="local">This Mac</option>
-                    {remoteMacs.map((mac) => (
-                      <option key={mac.id} value={mac.id} disabled={!mac.online}>{mac.label}{mac.online ? "" : " (offline)"}</option>
-                    ))}
-                  </select>
-                </label>
-              ) : null}
             </div>
             <Composer
-              plans={plansForRun}
+              plans={plans}
               planId={planId}
               onPlanChange={onPlanChange}
               model={model}
@@ -4297,13 +4095,13 @@ export default function App() {
                   a new quick chat that stays with this one
                 </span>
               </button>
-              <button className="pane-choice" disabled={remoteContext} onClick={() => openPane("terminal")}>
+              <button className="pane-choice" onClick={() => openPane("terminal")}>
                 Terminal
-                <span className="pane-choice-sub">{remoteContext ? "Open the host Mac's Platform window for its terminal" : "a shell in this folder"}</span>
+                <span className="pane-choice-sub">a shell in this folder</span>
               </button>
-              <button className="pane-choice" disabled={remoteContext} onClick={() => openPane("browser")}>
+              <button className="pane-choice" onClick={() => openPane("browser")}>
                 Browser
-                <span className="pane-choice-sub">{remoteContext ? "Open the host Mac's Platform window for its browser" : "look something up inline"}</span>
+                <span className="pane-choice-sub">look something up inline</span>
               </button>
             </div>
           </div>

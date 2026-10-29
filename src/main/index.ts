@@ -1,8 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from "electron";
 import { basename, join } from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { DATA_DIR, IS_DEV_COPY, addPlan, loadPlans, removePlan, updatePlan } from "./store.ts";
 import { secureDataDir } from "./dataDir.ts";
@@ -44,12 +44,6 @@ import { codexRoutingTimedOut } from "./codexRoutingRecovery.ts";
 import { backgroundWatch } from "./backgroundWait.ts";
 import { chatStatus, STOPPED, type ChatStatus } from "./chatStatus.ts";
 import { listSkills, personalSkillDirs, projectSkillDirs } from "./skills.ts";
-import {
-  attachedPaths, compareFileStates, compareProjectStates, fileState, listRemoteMacs, loadRemoteCache, projectState,
-  mergeRemoteEvents, remoteRequest, saveRemoteCache, saveRemoteMacs, startRemoteServer, validSshHost,
-  type FileState, type ProjectState, type RemoteMac
-} from "./remoteMacs.ts";
-import type { Server } from "node:http";
 import type { EngineEvent, EngineKind, PlanConfig, RunHandle } from "./engines/types.ts";
 
 app.setName("Civly Coding Platform");
@@ -104,13 +98,8 @@ interface Session {
   // flight. The next launch uses the engine's resume id (when available)
   // to finish it without making the user send the request again.
   restartTurn?: { prompt: string };
-  // The old record remains on its original Mac after a cross-Mac handoff.
-  transferredTo?: string;
-  transferLock?: string;
-  remoteOwned?: boolean;
   settling?: boolean;
   turnActive?: boolean;
-  transcriptVersion?: number;
 }
 
 interface SessionSummary {
@@ -137,12 +126,6 @@ interface SessionSummary {
   side: boolean;
   parentId?: string;
   createdAt: number;
-  updatedAt: number;
-  hostId?: string;
-  hostLabel?: string;
-  hostOnline?: boolean;
-  hostMissing?: boolean;
-  transferredTo?: string;
 }
 
 function summary(s: Session): SessionSummary {
@@ -168,98 +151,12 @@ function summary(s: Session): SessionSummary {
     defaultEffort: EFFORT_LEVELS[s.plan.engine] ? AUTO : "",
     side: Boolean(s.side),
     parentId: s.parentId,
-    createdAt: s.createdAt,
-    updatedAt: s.updatedAt,
-    transferredTo: s.transferredTo
+    createdAt: s.createdAt
   };
 }
 
 const sessions = new Map<string, Session>();
 let mainWindow: BrowserWindow | null = null;
-const remoteCache = loadRemoteCache<SessionSummary>();
-const remotePolls = new Set<string>();
-const REMOTE_PENDING_FILE = join(DATA_DIR, "remote-pending.json");
-let remotePending: Record<string, string> = {};
-try { remotePending = JSON.parse(readFileSync(REMOTE_PENDING_FILE, "utf8")) as Record<string, string>; } catch { /* no pending calls */ }
-const remoteHostOnline = new Map<string, boolean>();
-const remoteHostPlans = new Map<string, PlanConfig[]>();
-let hostServer: Server | null = null;
-
-function saveRemotePending(): void {
-  const temp = `${REMOTE_PENDING_FILE}.tmp`;
-  writeFileSync(temp, JSON.stringify(remotePending), { mode: 0o600 });
-  renameSync(temp, REMOTE_PENDING_FILE);
-}
-
-async function remoteAction<T>(mac: RemoteMac, method: string, args: unknown[]): Promise<T> {
-  const key = createHash("sha256").update(JSON.stringify([mac.id, method, args])).digest("hex");
-  const requestId = remotePending[key] ?? randomUUID();
-  remotePending[key] = requestId;
-  saveRemotePending();
-  // A transport failure keeps the request id. Retrying the same action
-  // cannot dispatch a second CLI turn if the first reply was lost.
-  const result = await remoteRequest<T>(mac, method, args, requestId);
-  delete remotePending[key];
-  saveRemotePending();
-  return result;
-}
-
-function remoteMac(id: string): RemoteMac | undefined { return listRemoteMacs().find((m) => m.id === id); }
-
-function remoteSummary(id: string): SessionSummary | undefined {
-  const cache = remoteCache[id];
-  if (!cache) return undefined;
-  const mac = remoteMac(cache.hostId);
-  return { ...cache.summary, hostId: cache.hostId, hostLabel: mac?.label ?? "Removed Mac", hostOnline: cache.online, hostMissing: cache.missing };
-}
-
-function allSessionSummaries(): SessionSummary[] {
-  return [...[...sessions.values()].map(summary), ...Object.keys(remoteCache).map(remoteSummary).filter((s): s is SessionSummary => Boolean(s))]
-    .sort((a, b) => b.updatedAt - a.updatedAt);
-}
-
-type SessionHandler = (_e: Electron.IpcMainInvokeEvent | null, ...args: any[]) => unknown;
-const localSessionHandlers = new Map<string, SessionHandler>();
-
-function handleSession<T extends (_e: Electron.IpcMainInvokeEvent | null, ...args: any[]) => unknown>(name: string, handler: T): void {
-  localSessionHandlers.set(name, handler);
-  ipcMain.handle(name, async (event, ...args) => {
-    const id = args[0];
-    const cache = typeof id === "string" ? remoteCache[id] : undefined;
-    if (!cache) return handler(event, ...args);
-    const mac = remoteMac(cache.hostId);
-    if (!mac) {
-      if (name === "chats:delete") {
-        delete remoteCache[id];
-        saveRemoteCache(remoteCache);
-        sendSessions();
-        return {};
-      }
-      return { error: "This Mac was removed. Add it again to reach the chat." };
-    }
-    try {
-      const prompt = ["session:send", "session:steer", "session:queue-add", "session:edit-last"].includes(name)
-        ? args[1] : name === "session:permission" ? args[5] : undefined;
-      if (typeof prompt === "string") {
-        const paths = attachedPaths([{ kind: "user", text: prompt }]);
-        if (paths.length) {
-          const local = fileState(paths);
-          const host = await remoteRequest<FileState>(mac, "host:file-state", [paths]);
-          const mismatch = compareFileStates(local, host);
-          if (mismatch) return { error: mismatch };
-        }
-      }
-      const result = await remoteAction<unknown>(mac, name, args);
-      if (name === "chats:delete" && !(result && typeof result === "object" && "error" in result && result.error)) {
-        delete remoteCache[id];
-        saveRemoteCache(remoteCache);
-      } else void pollRemoteMac(mac);
-      return result;
-    } catch (error) {
-      return { error: error instanceof Error ? error.message : String(error) };
-    }
-  });
-}
 
 // Chats persist as JSON under ~/.coding-plan-hub/chats so the old-chats list
 // survives restarts. The plan is stored by id and rehydrated from plans.json,
@@ -287,9 +184,6 @@ interface PersistedChat {
   parentSeen?: number;
   createdAt?: number;
   restartTurn?: { prompt: string };
-  transferredTo?: string;
-  remoteOwned?: boolean;
-  transcriptVersion?: number;
   savedAt: number;
   transcript: EngineEvent[];
 }
@@ -350,9 +244,6 @@ function persistChat(session: Session): void {
       parentSeen: session.parentSeen,
       createdAt: session.createdAt,
       restartTurn: session.restartTurn,
-      transferredTo: session.transferredTo,
-      remoteOwned: session.remoteOwned,
-      transcriptVersion: session.transcriptVersion,
       savedAt: Date.now(),
       transcript: session.transcript
     };
@@ -436,10 +327,7 @@ function loadChats(): void {
           restartTurn:
             record.restartTurn && typeof record.restartTurn.prompt === "string" && record.restartTurn.prompt.trim()
               ? { prompt: record.restartTurn.prompt }
-              : undefined,
-          transferredTo: record.transferredTo,
-          remoteOwned: Boolean(record.remoteOwned),
-          transcriptVersion: record.transcriptVersion ?? 0
+              : undefined
         });
       } catch {
         // skip a corrupt chat file rather than refusing to start
@@ -448,206 +336,6 @@ function loadChats(): void {
   } catch {
     // no chats directory yet, start empty
   }
-}
-
-interface RemoteSyncChat {
-  id: string;
-  summary?: SessionSummary;
-  offset: number;
-  total: number;
-  events: EngineEvent[];
-  version: number;
-}
-
-function transcriptHash(events: EngineEvent[]): string {
-  return createHash("sha256").update(JSON.stringify(events)).digest("hex");
-}
-
-async function pollRemoteMac(mac: RemoteMac): Promise<void> {
-  if (remotePolls.has(mac.id)) return;
-  remotePolls.add(mac.id);
-  const wasHostOnline = remoteHostOnline.get(mac.id);
-  const previousPlans = JSON.stringify(remoteHostPlans.get(mac.id));
-  try {
-    const offsets = Object.fromEntries(Object.entries(remoteCache)
-      .filter(([, chat]) => chat.hostId === mac.id)
-      .map(([id, chat]) => [id, { cursor: chat.transcript.length, version: chat.version ?? 0 }]));
-    const result = await remoteRequest<{ chats: RemoteSyncChat[]; plans: PlanConfig[] }>(mac, "host:sync", [offsets]);
-    remoteHostOnline.set(mac.id, true);
-    remoteHostPlans.set(mac.id, result.plans);
-    let changed = false;
-    for (const item of result.chats) {
-      const cache = remoteCache[item.id];
-      if (!cache) continue;
-      const previous = JSON.stringify(cache.summary);
-      const wasOnline = cache.online;
-      const wasMissing = cache.missing;
-      if (item.summary) cache.summary = item.summary;
-      cache.online = Boolean(item.summary);
-      cache.missing = !item.summary;
-      if (item.summary) {
-        cache.transcript = mergeRemoteEvents(cache.transcript, item.offset, item.events);
-        cache.version = item.version;
-      }
-      // A repeated or older response cannot append an event twice.
-      if (previous !== JSON.stringify(cache.summary) || item.events.length || wasOnline !== cache.online || wasMissing !== cache.missing) changed = true;
-      if (item.summary && item.events.length) {
-        mainWindow?.webContents.send("session:snapshot", { sessionId: item.id, offset: item.offset, events: item.events });
-      }
-    }
-    if (changed) saveRemoteCache(remoteCache);
-    if (changed) sendSessions();
-  } catch {
-    remoteHostOnline.set(mac.id, false);
-    let changed = false;
-    for (const cache of Object.values(remoteCache)) {
-      if (cache.hostId !== mac.id || (!cache.online && !cache.missing)) continue;
-      cache.online = false;
-      cache.missing = false;
-      changed = true;
-    }
-    if (changed) { saveRemoteCache(remoteCache); sendSessions(); }
-  } finally {
-    remotePolls.delete(mac.id);
-    if (wasHostOnline !== remoteHostOnline.get(mac.id) || previousPlans !== JSON.stringify(remoteHostPlans.get(mac.id)))
-      mainWindow?.webContents.send("remote:hosts-changed");
-  }
-}
-
-interface TransferChat {
-  id: string;
-  planId: string;
-  planEngine: EngineKind;
-  planLabel: string;
-  cwd: string;
-  model: string;
-  effort: string;
-  fullAccess: boolean;
-  filter: boolean;
-  tools: Tools;
-  title: string;
-  transcript: EngineEvent[];
-  sourceLabel: string;
-}
-
-function exportChat(id: string, transferId: string): { chat?: TransferChat; waiting?: boolean; error?: string } {
-  const session = sessions.get(id);
-  if (!session) return { error: "Chat is missing on its current Mac" };
-  if (session.transferredTo) return { error: `This chat already continued on ${session.transferredTo}` };
-  if (session.transferLock && session.transferLock !== transferId) return { error: "This chat is already continuing on another Mac." };
-  if (session.running || session.turnActive || session.settling) return { waiting: true };
-  if (session.queue.length) return { error: "A queued message is on hold. Send or remove it before continuing on another Mac." };
-  if (session.side || [...sessions.values()].some((s) => s.side && s.parentId === id))
-    return { error: "Close this chat's side conversations before continuing on another Mac." };
-  session.transferLock = transferId;
-  setTimeout(() => { if (session.transferLock === transferId) session.transferLock = undefined; }, 120_000);
-  persistChat(session);
-  return { chat: {
-    id: session.id, planId: session.plan.id, planEngine: session.plan.engine,
-    planLabel: session.plan.label, cwd: session.cwd, model: session.model,
-    effort: session.effort, fullAccess: session.fullAccess, filter: session.filter,
-    tools: session.tools, title: session.title, transcript: session.transcript,
-    sourceLabel: "another Mac"
-  } };
-}
-
-function importChat(chat: TransferChat, newId: string, expected: ProjectState, fromRemote = false): { sessionId?: string; summary?: SessionSummary; error?: string } {
-  const existing = sessions.get(newId);
-  if (existing) return { sessionId: newId, summary: summary(existing) };
-  const plan = loadPlans().find((p) => p.id === chat.planId);
-  if (!plan || !planReady(plan)) return { error: "The destination Mac needs this plan's CLI and sign-in." };
-  if (plan.engine !== chat.planEngine || plan.label !== chat.planLabel)
-    return { error: "The destination Mac's plan with this ID differs from the source plan." };
-  if (plan.models?.length && !plan.models.includes(chat.model))
-    return { error: `The destination Mac does not offer ${chat.model} for this plan.` };
-  const files = attachedPaths(chat.transcript);
-  const error = compareProjectStates(expected, projectState(chat.cwd, files));
-  if (error) return { error };
-  const now = Date.now();
-  const session: Session = {
-    id: newId, plan, cwd: chat.cwd, model: chat.model, effort: chat.effort,
-    fullAccess: chat.fullAccess, filter: chat.filter, tools: chat.tools,
-    running: false, transcript: structuredClone(chat.transcript), title: chat.title,
-    queue: [], pending: new Map(), updatedAt: now, createdAt: now,
-    handoff: true, resumeId: undefined, remoteOwned: fromRemote
-  };
-  sessions.set(newId, session);
-  pushEvent(session, { kind: "status", text: `Continued from ${chat.sourceLabel}. The next message starts a new CLI session with a recap of this chat.` });
-  persistChat(session);
-  sendSessions();
-  return { sessionId: newId, summary: summary(session) };
-}
-
-let remotePlansCachedAt = 0;
-let remotePlansCached: PlanConfig[] = [];
-function safeRemotePlans(): PlanConfig[] {
-  if (Date.now() - remotePlansCachedAt < 30_000) return remotePlansCached;
-  remotePlansCached = loadPlans().map((plan) => ({
-    id: plan.id, label: plan.label, engine: plan.engine, color: plan.color,
-    models: plan.models, installed: plan.installed, loggedIn: planReady(plan),
-    bin: "", extraArgs: []
-  }));
-  remotePlansCachedAt = Date.now();
-  return remotePlansCached;
-}
-
-async function hostDispatch(method: string, args: unknown[]): Promise<unknown> {
-  if (!loadSettings().acceptRemoteChats) throw new Error("Remote chats are off on this Mac.");
-  if (method === "host:health") return { name: app.getName(), version: app.getVersion(),
-    plans: safeRemotePlans() };
-  if (method === "host:sync") {
-    const offsets = args[0] as Record<string, { cursor: number; version: number }>;
-    if (!offsets || typeof offsets !== "object" || Object.keys(offsets).length > 1000) throw new Error("Invalid sync request");
-    return { plans: safeRemotePlans(), chats: Object.entries(offsets).map(([id, checkpoint]) => {
-      const session = sessions.get(id);
-      const cursor = checkpoint?.cursor;
-      const offset = !session || !Number.isSafeInteger(cursor) || cursor < 0 || cursor > session.transcript.length ||
-        checkpoint.version !== (session.transcriptVersion ?? 0) ? 0 : cursor;
-      return { id, summary: session ? summary(session) : undefined, offset,
-        total: session?.transcript.length ?? 0, events: session?.transcript.slice(offset) ?? [], version: session?.transcriptVersion ?? 0 };
-    }) };
-  }
-  if (method === "host:project-state") return projectState(args[0] as string, args[1] as string[] ?? []);
-  if (method === "host:file-state") return fileState(args[0] as string[]);
-  if (method === "host:export") return exportChat(args[0] as string, args[1] as string);
-  if (method === "host:release") {
-    const session = sessions.get(args[0] as string);
-    if (session && session.transferLock === args[1]) session.transferLock = undefined;
-    return {};
-  }
-  if (method === "host:import") return importChat(args[0] as TransferChat, args[1] as string, args[2] as ProjectState, true);
-  if (method === "host:mark-transferred") {
-    const session = sessions.get(args[0] as string);
-    if (!session) return { error: "Source chat is missing" };
-    if (session.transferredTo === args[1]) return {};
-    if (session.running || session.turnActive || session.settling) return { error: "The chat started another turn; continuation was stopped." };
-    if (session.transferLock && session.transferLock !== args[2]) return { error: "Another continuation is in progress." };
-    if (transcriptHash(session.transcript) !== args[3]) return { error: "The source chat changed during continuation. Try again after reviewing it." };
-    session.transferredTo = args[1] as string;
-    session.transferLock = undefined;
-    pushEvent(session, { kind: "status", text: `Continued on ${session.transferredTo}. This original record stays here.` });
-    persistChat(session);
-    sendSessions();
-    return {};
-  }
-  if (method === "session:create") return createLocalSession(args[0] as CreateSessionOptions, true);
-  const handler = localSessionHandlers.get(method);
-  if (!handler) throw new Error("Unknown remote action");
-  return handler(null, ...args);
-}
-
-let hostStarting = false;
-async function configureHostServer(): Promise<void> {
-  if (!loadSettings().acceptRemoteChats) {
-    hostServer?.close();
-    hostServer = null;
-    return;
-  }
-  if (hostServer || hostStarting) return;
-  hostStarting = true;
-  try { hostServer = await startRemoteServer(hostDispatch); }
-  catch (error) { console.warn("Remote host could not start:", error); }
-  finally { hostStarting = false; }
 }
 
 // Projects are the folders added in the app, persisted in
@@ -938,20 +626,6 @@ app.whenReady().then(() => {
   if (HIDDEN) app.dock?.hide();
   secureDataDir();
   loadChats();
-  for (const cache of Object.values(remoteCache)) cache.online = false;
-  void configureHostServer();
-  const lastRemoteSync = new Map<string, number>();
-  const syncRemoteMacs = (): void => {
-    for (const mac of listRemoteMacs()) {
-      const running = Object.values(remoteCache).some((chat) => chat.hostId === mac.id && chat.summary.running);
-      const interval = running ? 1200 : 7000;
-      if (Date.now() - (lastRemoteSync.get(mac.id) ?? 0) < interval) continue;
-      lastRemoteSync.set(mac.id, Date.now());
-      void pollRemoteMac(mac);
-    }
-  };
-  syncRemoteMacs();
-  setInterval(syncRemoteMacs, 1000);
   onUsageChange((all) => mainWindow?.webContents.send("usage:update", all));
   // the plans that can be asked directly, now and every ten minutes
   const pollUsage = (): void => {
@@ -1042,14 +716,12 @@ ipcMain.handle("plans:delete", async (_e, planId: string) => {
 
 interface CreateSessionOptions {
   planId: string; cwd: string; model: string; effort: string; fullAccess: boolean;
-  filter?: boolean; tools?: Tools; side?: boolean; parentId?: string; hostId?: string;
+  filter?: boolean; tools?: Tools; side?: boolean; parentId?: string;
 }
 
-function createLocalSession(opts: CreateSessionOptions, fromRemote = false): { sessionId?: string; summary?: SessionSummary; error?: string } {
+ipcMain.handle("session:create", (_e, opts: CreateSessionOptions) => {
   const plan = loadPlans().find((p) => p.id === opts.planId);
   if (!plan) return { error: `Unknown plan: ${opts.planId}` };
-  if (fromRemote && !planReady(plan)) return { error: `${plan.label} needs its CLI and sign-in on this Mac.` };
-  if (fromRemote && (!existsSync(opts.cwd) || !statSync(opts.cwd).isDirectory())) return { error: `Project folder is missing on this Mac: ${opts.cwd}` };
   const session: Session = {
     id: randomUUID(),
     plan,
@@ -1067,39 +739,16 @@ function createLocalSession(opts: CreateSessionOptions, fromRemote = false): { s
     updatedAt: Date.now(),
     createdAt: Date.now(),
     side: Boolean(opts.side),
-    parentId: opts.side ? opts.parentId ?? "" : undefined,
-    remoteOwned: fromRemote
+    parentId: opts.side ? opts.parentId ?? "" : undefined
   };
   sessions.set(session.id, session);
   persistChat(session);
   sendSessions();
-  return { sessionId: session.id, summary: summary(session) };
-}
-
-ipcMain.handle("session:create", async (_e, opts: CreateSessionOptions) => {
-  if (!opts.hostId) return createLocalSession(opts);
-  const mac = remoteMac(opts.hostId);
-  if (!mac) return { error: "Choose a paired Mac in Settings." };
-  try {
-    // The same path must name a clean project at the same commit on both
-    // Macs. The app does not silently copy files or use the wrong checkout.
-    const source = projectState(opts.cwd);
-    const destination = await remoteRequest<ProjectState>(mac, "host:project-state", [opts.cwd, []]);
-    const mismatch = compareProjectStates(source, destination);
-    if (mismatch) return { error: mismatch };
-    const created = await remoteAction<{ sessionId?: string; summary?: SessionSummary; error?: string }>(mac, "session:create", [{ ...opts, hostId: undefined }]);
-    if (created.error || !created.sessionId || !created.summary) return created;
-    remoteCache[created.sessionId] = { hostId: mac.id, summary: created.summary, transcript: [], online: true, missing: false, version: 0 };
-    saveRemoteCache(remoteCache);
-    sendSessions();
-    void pollRemoteMac(mac);
-    return { sessionId: created.sessionId };
-  } catch (error) { return { error: error instanceof Error ? error.message : String(error) }; }
+  return { sessionId: session.id };
 });
-
 // The new-task screen's side conversations go with the chat that screen
 // starts. Only the link changes, so it is allowed mid-reply.
-handleSession("session:set-parent", (_e, sessionId: string, parentId: string) => {
+ipcMain.handle("session:set-parent", (_e, sessionId: string, parentId: string) => {
   const session = sessions.get(sessionId);
   if (!session?.side) return { error: "Unknown session" };
   session.parentId = parentId;
@@ -1109,9 +758,12 @@ handleSession("session:set-parent", (_e, sessionId: string, parentId: string) =>
   return {};
 });
 
-ipcMain.handle("session:list", () => allSessionSummaries());
+ipcMain.handle(
+  "session:list",
+  () => [...sessions.values()].sort((a, b) => b.updatedAt - a.updatedAt).map(summary)
+);
 
-handleSession(
+ipcMain.handle(
   "session:update",
   (
     _e,
@@ -1128,8 +780,7 @@ handleSession(
   ) => {
     const session = sessions.get(sessionId);
     if (!session) return { error: "Unknown session" };
-    if (session.running || session.turnActive || session.settling || session.transferLock) return { error: "Wait for the current message or Mac transfer to finish before changing settings" };
-    if (session.transferredTo) return { error: `This chat continued on ${session.transferredTo}. Open the new chat there.` };
+    if (session.running || session.turnActive || session.settling) return { error: "Wait for the current message to finish before changing settings" };
     if (patch.planId !== undefined && patch.planId !== session.plan.id) {
       const plan = loadPlans().find((p) => p.id === patch.planId);
       if (!plan) return { error: `Unknown plan: ${patch.planId}` };
@@ -1163,7 +814,7 @@ handleSession(
 
 // Renaming only touches the label, so unlike session:update it is allowed
 // while a message is running.
-handleSession("session:rename", (_e, sessionId: string, title: string) => {
+ipcMain.handle("session:rename", (_e, sessionId: string, title: string) => {
   const session = sessions.get(sessionId);
   if (!session) return { error: "Unknown session" };
   const next = title.trim().slice(0, TITLE_MAX);
@@ -1173,12 +824,11 @@ handleSession("session:rename", (_e, sessionId: string, title: string) => {
   return { summary: summary(session) };
 });
 
-handleSession("chats:delete", (_e, sessionId: string) => {
+ipcMain.handle("chats:delete", (_e, sessionId: string) => {
   // a chat's side conversations go with it; nothing could show them again
   const doomed = [...sessions.values()].filter(
     (s) => s.id === sessionId || (s.side && s.parentId === sessionId)
   );
-  if (doomed.some((session) => session.transferLock)) return { error: "Wait for this chat's Mac transfer to finish before deleting it." };
   for (const session of doomed) {
     // stopped the way the Stop button does, so no notification follows
     if ((session.running || session.turnActive) && session.handle) {
@@ -1234,119 +884,8 @@ ipcMain.handle("settings:set", (_e, patch: Partial<Settings>) => {
   const saved = saveSettings(patch);
   // turned on: catch up now rather than at the next check
   if (patch?.updateClis === true) void checkClis();
-  if (patch?.acceptRemoteChats !== undefined) void configureHostServer();
   return saved;
 });
-
-ipcMain.handle("remote:macs", () => listRemoteMacs().map((mac) => ({ ...mac, online: remoteHostOnline.get(mac.id) ?? false, plans: remoteHostPlans.get(mac.id) ?? [] })));
-
-ipcMain.handle("remote:add", async (_e, label: string, sshHost: string) => {
-  const host = sshHost?.trim();
-  const name = label?.trim();
-  if (!host || !validSshHost(host)) return { error: "Enter an SSH host alias or user@hostname." };
-  if (!name || name.length > 40) return { error: "Give this Mac a name of 1 to 40 characters." };
-  const macs = listRemoteMacs();
-  const existing = macs.find((m) => m.sshHost === host);
-  const mac: RemoteMac = { id: existing?.id ?? createHash("sha256").update(host).digest("hex").slice(0, 16), label: name, sshHost: host };
-  try {
-    const health = await remoteRequest<{ plans: PlanConfig[] }>(mac, "host:health", []);
-    saveRemoteMacs([...macs.filter((m) => m.id !== mac.id), mac]);
-    remoteHostOnline.set(mac.id, true);
-    remoteHostPlans.set(mac.id, health.plans);
-    void pollRemoteMac(mac);
-    mainWindow?.webContents.send("remote:hosts-changed");
-    return { mac };
-  } catch (error) { return { error: error instanceof Error ? error.message : String(error) }; }
-});
-
-ipcMain.handle("remote:remove", (_e, id: string) => {
-  saveRemoteMacs(listRemoteMacs().filter((m) => m.id !== id));
-  remoteHostOnline.delete(id);
-  remoteHostPlans.delete(id);
-  for (const cache of Object.values(remoteCache)) if (cache.hostId === id) { cache.online = false; cache.missing = false; }
-  saveRemoteCache(remoteCache);
-  sendSessions();
-  mainWindow?.webContents.send("remote:hosts-changed");
-  return {};
-});
-
-ipcMain.handle("remote:continue", async (_e, sourceId: string, destinationId: string) => {
-  const sourceCache = remoteCache[sourceId];
-  const sourceMac = sourceCache ? remoteMac(sourceCache.hostId) : undefined;
-  const destinationMac = destinationId === "local" ? undefined : remoteMac(destinationId);
-  if (sourceCache && !sourceMac) return { error: "The current Mac is no longer paired." };
-  if (destinationId !== "local" && !destinationMac) return { error: "Choose a paired destination Mac." };
-  if ((sourceCache?.hostId ?? "local") === destinationId) return { error: "This chat already runs on that Mac." };
-  const sourceLabel = sourceMac?.label ?? "This Mac";
-  const destinationLabel = destinationMac?.label ?? "This Mac";
-  let exported = false;
-  let imported = false;
-  const transferId = createHash("sha256").update(`${sourceId}:${destinationId}:transfer`).digest("hex");
-  try {
-    let transfer: TransferChat | undefined;
-    const until = Date.now() + 30 * 60_000;
-    while (!transfer) {
-      const result = sourceMac
-        ? await remoteRequest<{ chat?: TransferChat; waiting?: boolean; error?: string }>(sourceMac, "host:export", [sourceId, transferId])
-        : exportChat(sourceId, transferId);
-      if (result.error) return { error: result.error };
-      if (result.chat) { transfer = result.chat; exported = true; break; }
-      if (!result.waiting) return { error: "The source chat could not be exported." };
-      if (Date.now() > until) return { error: "The current turn has not finished. Try again when it ends." };
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-    }
-    transfer.sourceLabel = sourceLabel;
-    const transferHash = transcriptHash(transfer.transcript);
-    const files = attachedPaths(transfer.transcript);
-    const sourceState = sourceMac
-      ? await remoteRequest<ProjectState>(sourceMac, "host:project-state", [transfer.cwd, files])
-      : projectState(transfer.cwd, files);
-    const destinationState = destinationMac
-      ? await remoteRequest<ProjectState>(destinationMac, "host:project-state", [transfer.cwd, files])
-      : projectState(transfer.cwd, files);
-    const mismatch = compareProjectStates(sourceState, destinationState);
-    if (mismatch) return { error: mismatch };
-    const newId = createHash("sha256").update(`${sourceId}:${destinationId}`).digest("hex").slice(0, 32);
-    const created = destinationMac
-      ? await remoteAction<{ sessionId?: string; summary?: SessionSummary; error?: string }>(destinationMac, "host:import", [transfer, newId, sourceState])
-      : importChat(transfer, newId, sourceState);
-    if (created.error || !created.sessionId || !created.summary) return { error: created.error ?? "Destination could not create the chat." };
-    imported = true;
-    if (destinationMac) {
-      remoteCache[newId] = { hostId: destinationMac.id, summary: created.summary, transcript: [], online: true, missing: false, version: 0 };
-      saveRemoteCache(remoteCache);
-      void pollRemoteMac(destinationMac);
-    }
-    const marked = sourceMac
-      ? await remoteAction<{ error?: string }>(sourceMac, "host:mark-transferred", [sourceId, destinationLabel, transferId, transferHash])
-      : hostDispatchLocalMark(sourceId, destinationLabel, transferId, transferHash);
-    if (marked.error) return { error: `The new chat was created on ${destinationLabel}, but the old record could not be locked: ${marked.error}`, sessionId: newId };
-    if (sourceMac) void pollRemoteMac(sourceMac);
-    sendSessions();
-    return { sessionId: newId };
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) };
-  } finally {
-    if (exported && !imported) {
-      if (sourceMac) void remoteAction(sourceMac, "host:release", [sourceId, transferId]).catch(() => undefined);
-      else { const source = sessions.get(sourceId); if (source?.transferLock === transferId) source.transferLock = undefined; }
-    }
-  }
-});
-
-function hostDispatchLocalMark(id: string, label: string, transferId: string, expectedHash: string): { error?: string } {
-  const session = sessions.get(id);
-  if (!session) return { error: "Source chat is missing" };
-  if (session.running || session.turnActive || session.settling) return { error: "The chat started another turn." };
-  if (session.transferredTo === label) return {};
-  if (session.transferLock && session.transferLock !== transferId) return { error: "Another continuation is in progress." };
-  if (transcriptHash(session.transcript) !== expectedHash) return { error: "The source chat changed during continuation. Try again after reviewing it." };
-  session.transferredTo = label;
-  session.transferLock = undefined;
-  pushEvent(session, { kind: "status", text: `Continued on ${label}. This original record stays here.` });
-  persistChat(session);
-  return {};
-}
 
 ipcMain.handle("clis:status", () => freshCliStatus());
 ipcMain.handle("clis:update", (_e, engine: EngineKind) => updateCli(engine));
@@ -1533,7 +1072,6 @@ ipcMain.handle("pty:close", (_e, id: string) => {
 });
 
 ipcMain.handle("session:transcript", (_e, sessionId: string) => {
-  if (remoteCache[sessionId]) return remoteCache[sessionId].transcript;
   const session = sessions.get(sessionId);
   return session ? session.transcript : [];
 });
@@ -1957,20 +1495,6 @@ function rememberInterruptedTurns(): void {
 function resumeRestartedTurns(): void {
   for (const session of sessions.values()) {
     const interrupted = session.restartTurn;
-    if (session.remoteOwned) {
-      // A host restart must never run the same command a second time. The
-      // transcript and CLI conversation remain available for a deliberate
-      // next message after the user checks the project state.
-      const lastUser = session.transcript.map((event) => event.kind).lastIndexOf("user");
-      const tail = lastUser >= 0 ? session.transcript.slice(lastUser + 1) : [];
-      const finished = tail.some((event) => event.kind === "done" || event.kind === "error" ||
-        (event.kind === "status" && event.text === STOPPED));
-      if (interrupted || (lastUser >= 0 && !finished)) {
-        session.restartTurn = undefined;
-        pushEvent(session, { kind: "error", text: "The host restarted during this turn. Check the project before continuing; no command was run again." });
-      }
-      continue;
-    }
     if (!interrupted || session.running) continue;
     session.restartTurn = undefined;
     pushEvent(session, { kind: "status", text: "Resuming after app restart" });
@@ -2023,11 +1547,9 @@ function sendSessions(): void {
   mainWindow?.webContents.send("sessions:changed");
 }
 
-handleSession("session:send", (_e, sessionId: string, prompt: string) => {
+ipcMain.handle("session:send", (_e, sessionId: string, prompt: string) => {
   const session = sessions.get(sessionId);
   if (!session) return { error: "Unknown session" };
-  if (session.transferLock) return { error: "This chat is continuing on another Mac. Wait for the transfer to finish." };
-  if (session.transferredTo) return { error: `This chat continued on ${session.transferredTo}. Open the new chat there.` };
   if (session.running || session.turnActive || session.settling) return { error: "Session is already running" };
   if (!prompt.trim()) return { error: "Empty prompt" };
   startTurn(session, prompt);
@@ -2051,10 +1573,9 @@ async function stopRun(session: Session): Promise<boolean> {
 // Steer: interrupt the running turn and send a new message into the same
 // conversation. The engine is stopped, then resumed with the new message, so
 // it keeps everything from the interrupted turn up to the cut.
-handleSession("session:steer", async (_e, sessionId: string, prompt: string) => {
+ipcMain.handle("session:steer", async (_e, sessionId: string, prompt: string) => {
   const session = sessions.get(sessionId);
   if (!session) return { error: "Unknown session" };
-  if (session.transferLock || session.transferredTo) return { error: "This chat is moving to another Mac." };
   if (session.settling) return { error: "The reply is finishing. Send again in a moment." };
   if (!prompt.trim()) return { error: "Empty prompt" };
   if (session.steering) return { error: "Already steering this chat" };
@@ -2088,10 +1609,9 @@ handleSession("session:steer", async (_e, sessionId: string, prompt: string) => 
 // goes out as the next turn. The engine already saw the old message (it is
 // in the resumed conversation), so it is told to set that one aside. If a
 // reply to it is still running, that reply stops first.
-handleSession("session:edit-last", async (_e, sessionId: string, text: string) => {
+ipcMain.handle("session:edit-last", async (_e, sessionId: string, text: string) => {
   const session = sessions.get(sessionId);
   if (!session) return { error: "Unknown session" };
-  if (session.transferLock || session.transferredTo) return { error: "This chat is moving to another Mac." };
   if (session.settling) return { error: "The reply is finishing. Try the edit in a moment." };
   if (!text.trim()) return { error: "Empty message" };
   if (session.steering) return { error: "This chat is already switching messages" };
@@ -2105,7 +1625,6 @@ handleSession("session:edit-last", async (_e, sessionId: string, text: string) =
       return { error: "The engine did not stop in time. Try Stop, then edit again." };
     }
     last.replaced = true;
-    session.transcriptVersion = (session.transcriptVersion ?? 0) + 1;
     persistChat(session);
     // no engine conversation yet means the old message never registered
     const enginePrompt = session.resumeId
@@ -2124,7 +1643,7 @@ handleSession("session:edit-last", async (_e, sessionId: string, text: string) =
 // and response carries a reply typed in the message box instead; allowing
 // with neither tells Claude you did not answer. gone: nothing is waiting on
 // this request any more, so trying again cannot help.
-handleSession(
+ipcMain.handle(
   "session:permission",
   (
     _e,
@@ -2161,10 +1680,9 @@ handleSession(
 
 // Queue: a message typed while a reply runs goes out when it finishes. With
 // nothing running it simply sends.
-handleSession("session:queue-add", (_e, sessionId: string, text: string) => {
+ipcMain.handle("session:queue-add", (_e, sessionId: string, text: string) => {
   const session = sessions.get(sessionId);
   if (!session) return { error: "Unknown session" };
-  if (session.transferLock || session.transferredTo) return { error: "This chat is moving to another Mac." };
   if (!text.trim()) return { error: "Empty message" };
   if (!session.running && !session.turnActive && !session.settling && !session.steering) {
     startTurn(session, text);
@@ -2176,7 +1694,7 @@ handleSession("session:queue-add", (_e, sessionId: string, text: string) => {
   return {};
 });
 
-handleSession("session:queue-remove", (_e, sessionId: string, index: number) => {
+ipcMain.handle("session:queue-remove", (_e, sessionId: string, index: number) => {
   const session = sessions.get(sessionId);
   if (!session) return { error: "Unknown session" };
   session.queue.splice(index, 1);
@@ -2187,10 +1705,9 @@ handleSession("session:queue-remove", (_e, sessionId: string, index: number) => 
 
 // Send a queued message now: it takes over from the running reply the way
 // a steer does, or simply sends when nothing is running.
-handleSession("session:queue-send-now", async (_e, sessionId: string, index: number) => {
+ipcMain.handle("session:queue-send-now", async (_e, sessionId: string, index: number) => {
   const session = sessions.get(sessionId);
   if (!session) return { error: "Unknown session" };
-  if (session.transferLock || session.transferredTo) return { error: "This chat is moving to another Mac." };
   const [text] = session.queue.splice(index, 1);
   if (text === undefined) return { error: "That message is no longer queued" };
   if (session.settling || session.steering) {
@@ -2365,7 +1882,7 @@ function engineDefaultEffort(engine: string): string {
 
 // Stop is the user's choice, not a failure: the turn is marked so the
 // sidebar light goes neutral instead of red.
-handleSession("session:cancel", (_e, sessionId: string) => {
+ipcMain.handle("session:cancel", (_e, sessionId: string) => {
   const session = sessions.get(sessionId);
   // an engine that sent its reply but has not exited still shows as running
   if (session && (session.running || session.turnActive) && !session.settling && session.handle) {

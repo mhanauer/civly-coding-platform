@@ -9,7 +9,7 @@ import { accountEmail, linkShared, newAccountEnv, ownHome, ownHomeLoggedIn, supp
 import { DATA_DIR, IS_DEV_COPY } from "./dataDir.ts";
 
 // Whether a saved login exists on this machine. A saved credential can expire;
-// planReady asks Claude and Codex directly before the UI or remote host calls
+// planReady asks Claude and Codex directly before the UI calls
 // one of their subscription accounts signed in.
 export function engineLoggedIn(plan: PlanConfig): boolean {
   // an added subscription account keeps its login in its own home

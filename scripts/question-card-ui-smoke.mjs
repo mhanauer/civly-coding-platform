@@ -29,7 +29,6 @@ const handlers = {
   "session:list": () => [session], "session:transcript": () => transcript,
   "ui:active-chat": () => undefined, "update:status": () => ({ ready: false, waiting: false }),
   "browser:checks": () => [],
-  "remote:macs": () => [],
   "settings:get": () => ({ replyFilter: false, devBranch: false, zcodeProjects: false }),
   "session:permission": (_event, id, requestId, allow, always, given, response) => {
     assert.equal(id, session.id);
