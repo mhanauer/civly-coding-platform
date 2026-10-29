@@ -86,10 +86,11 @@ export function parseCodexAccountUsage(value: unknown): CodexAccountUsage | null
     : undefined;
 
   if (!windows.length && !credits && !resets) return null;
-  // A plan can continue on purchased credits after included usage hits 100%.
-  const limited = result.ordinaryUsageAllowed === false ||
-    (result.ordinaryUsageAllowed !== true && !credits?.unlimited && !creditData?.hasCredits &&
-      windows.some((w) => w.usedPct >= 100));
+  // A plan continues on purchased credits after included usage runs out, and
+  // ChatGPT then reports ordinaryUsageAllowed false with credits still usable.
+  const onCredits = (credits?.unlimited || creditData?.hasCredits === true) && limit?.spendControlReached !== true;
+  const limited = !onCredits && (result.ordinaryUsageAllowed === false ||
+    (result.ordinaryUsageAllowed !== true && windows.some((w) => w.usedPct >= 100)));
   return { windows, credits, resets, limited };
 }
 

@@ -46,3 +46,27 @@ test("included usage at 100 percent does not mark a credit-backed account as out
   assert.equal(usage?.windows[0].usedPct, 100);
   assert.equal(usage?.limited, false);
 });
+
+// The shape ChatGPT returns once a Pro plan's weekly usage runs out.
+const outOfIncluded = (credits: Record<string, unknown>, spendControlReached = false) => ({
+  ordinaryUsageAllowed: false,
+  rateLimitsByLimitId: {
+    codex: {
+      primary: { usedPercent: 100, windowDurationMins: 10080, resetsAt: 1793774150 },
+      credits,
+      spendControlReached,
+      rateLimitReachedType: "rate_limit_reached"
+    }
+  }
+});
+
+test("an account past its included usage keeps running on purchased credits", () => {
+  const usage = parseCodexAccountUsage(outOfIncluded({ hasCredits: true, unlimited: false, balance: "60258.7010000000" }));
+  assert.deepEqual(usage?.credits, { balance: 60258.701, unlimited: false });
+  assert.equal(usage?.limited, false);
+});
+
+test("an account past its included usage is out without credits or at its spend cap", () => {
+  assert.equal(parseCodexAccountUsage(outOfIncluded({ hasCredits: false, unlimited: false, balance: "0" }))?.limited, true);
+  assert.equal(parseCodexAccountUsage(outOfIncluded({ hasCredits: true, unlimited: false, balance: "50" }, true))?.limited, true);
+});
