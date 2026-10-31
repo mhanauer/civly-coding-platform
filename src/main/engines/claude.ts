@@ -4,6 +4,7 @@ import type { BackgroundTask, EngineAdapter, EngineEvent, SendOptions, TokenCoun
 import { classifyTool } from "./steps.ts";
 import { denyMessage } from "./claudeDeny.ts";
 import { isLimitError } from "../limitFallback.ts";
+import { timeZoneGuide } from "../timeZone.ts";
 
 interface ContentBlock {
   type?: string;
@@ -207,7 +208,7 @@ export function claudeAdapter(): EngineAdapter {
       // a lean chat keeps only the servers given here, and no skills or
       // slash commands; their lists ride along with every step otherwise
       if (opts.lean) args.push("--strict-mcp-config", "--disable-slash-commands");
-      args.push("--append-system-prompt", waitGuide());
+      args.push("--append-system-prompt", `${waitGuide()}\n\n${timeZoneGuide()}`);
       return args;
     },
 

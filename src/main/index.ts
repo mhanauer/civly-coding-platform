@@ -42,6 +42,7 @@ import { allUsage, onUsageChange, recordLimitError, recordUsage, refreshCodex, r
 import { resolveMuseSnapshot, type MuseSnapshotInput } from "./museUsage.ts";
 import { codexRoutingTimedOut } from "./codexRoutingRecovery.ts";
 import { backgroundWatch } from "./backgroundWait.ts";
+import { timeZoneGuide } from "./timeZone.ts";
 import { chatStatus, STOPPED, type ChatStatus } from "./chatStatus.ts";
 import { listSkills, personalSkillDirs, projectSkillDirs } from "./skills.ts";
 import type { EngineEvent, EngineKind, PlanConfig, RunHandle } from "./engines/types.ts";
@@ -1165,6 +1166,11 @@ function startTurn(
   }
   const beside = besideContext(session);
   if (beside) toEngine = `${beside}\n\n---\n\nMy message:\n${toEngine}`;
+  // Claude Code has this in its system prompt; other engines are told once,
+  // on the first message their conversation sees
+  if (runPlan.engine !== "claude" && !session.resumeId) {
+    toEngine = `[Note from the app: ${timeZoneGuide()}]\n\n${toEngine}`;
+  }
   // Lean chats: a message that plainly needs the connectors, skills or slash
   // commands gets them before it goes out. Otherwise an auto chat is told
   // how to ask for them, and asks with its reply (watch).

@@ -1,5 +1,6 @@
 import type { BackgroundTask } from "./engines/types.ts";
 import { CHECK_IN_MINUTES } from "./engines/claude.ts";
+import { localTime } from "./timeZone.ts";
 
 // A reply can end while background work it started still runs: Claude Code
 // keeps the chat open and picks it back up when that work exits. A wait
@@ -15,14 +16,15 @@ function named(tasks: BackgroundTask[]): string {
   return tasks.map((t) => t.description || (t.type === "local_bash" ? "a command" : "a background task")).join("; ");
 }
 
-export function checkInNote(tasks: BackgroundTask[], now: number): string {
+// `zone` is for tests; chats get the Mac's time zone
+export function checkInNote(tasks: BackgroundTask[], now: number, zone?: string): string {
   const list = tasks
     .map((t) => `"${t.description || t.type || "a task"}" (running ${minutes(now - t.startedAt)} min)`)
     .join(", ");
   return (
     `[Note from the app: your reply has ended, and this chat is still open only for background work: ${list}. ` +
     "Check directly whether what it waits for is done. If it is, or if the wait cannot end on its own, stop it with TaskStop and carry on with my request. " +
-    "If it is still rightly waiting, give me a one-line update: where it stands, what it waits for and when it should end, then end your turn.]"
+    `If it is still rightly waiting, give me a one-line update: where it stands, what it waits for and when it should end, then end your turn. It is ${localTime(new Date(now), zone)} now; give times in my time zone.]`
   );
 }
 

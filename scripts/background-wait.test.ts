@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { claudeAdapter, waitGuide } from "../src/main/engines/claude.ts";
 import { backgroundWatch, checkInNote } from "../src/main/backgroundWait.ts";
+import { localTime, timeZoneGuide } from "../src/main/timeZone.ts";
 import type { BackgroundTask, EngineAdapter, EngineEvent } from "../src/main/engines/types.ts";
 
 // stream-json lines as Claude Code 2.1.309 writes them for a background
@@ -148,4 +149,21 @@ test("a check-in the engine cannot take is not counted or shown", (t) => {
 test("the check-in note names each task and how long it has run", () => {
   const note = checkInNote([task("a", 0), task("b", 1_800_000)], 3_600_000);
   assert.match(note, /"Wait a" \(running 60 min\), "Wait b" \(running 30 min\)/);
+});
+
+test("chats are told the user's time zone, not UTC", () => {
+  // 21:38 UTC on Oct 31, 2026 is 5:38 PM EDT; a week later New York is on EST
+  const summer = new Date(Date.UTC(2026, 9, 31, 21, 38));
+  const winter = new Date(Date.UTC(2026, 10, 7, 21, 38));
+  assert.equal(localTime(summer, "America/New_York"), "5:38 PM EDT");
+  assert.equal(localTime(winter, "America/New_York"), "4:38 PM EST");
+  const guide = timeZoneGuide(summer, "America/New_York");
+  assert.match(guide, /America\/New_York \(EDT right now\)/);
+  assert.match(guide, /Do not give times in UTC/);
+  // no clock time, so the system prompt stays the same message to message
+  assert.equal(timeZoneGuide(new Date(Date.UTC(2026, 9, 31, 13, 2)), "America/New_York"), guide);
+  const prompt = claudeAdapter().buildArgs({ prompt: "x", cwd: "/tmp" });
+  assert.match(prompt[prompt.indexOf("--append-system-prompt") + 1], /time zone is/);
+  const note = checkInNote([task("b1", 0)], summer.getTime(), "America/New_York");
+  assert.match(note, /It is 5:38 PM EDT now; give times in my time zone/);
 });
