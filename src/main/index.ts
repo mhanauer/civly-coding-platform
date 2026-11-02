@@ -38,8 +38,7 @@ import {
   planIsOut,
   untriedModel
 } from "./limitFallback.ts";
-import { allUsage, onUsageChange, recordLimitError, recordUsage, refreshCodex, refreshPlanUsage, saveMuseSubscriptionSnapshot } from "./usage.ts";
-import { resolveMuseSnapshot, type MuseSnapshotInput } from "./museUsage.ts";
+import { allUsage, onUsageChange, recordLimitError, recordUsage, refreshCodex, refreshPlanUsage } from "./usage.ts";
 import { codexRoutingTimedOut } from "./codexRoutingRecovery.ts";
 import { backgroundWatch } from "./backgroundWait.ts";
 import { timeZoneGuide } from "./timeZone.ts";
@@ -1768,20 +1767,6 @@ ipcMain.handle("browser:downloads", async () => {
 ipcMain.handle("usage:refresh", async () => {
   await Promise.all(loadPlans().filter((p) => p.installed).map((p) => refreshPlanUsage(p)));
   return allUsage();
-});
-
-// Muse's subscription percent exists only in its TUI's /usage; the user
-// pastes it here once and it is stored for every Muse plan.
-ipcMain.handle("usage:muse-snapshot", async (_e, input: MuseSnapshotInput) => {
-  const snap = resolveMuseSnapshot(input ?? {});
-  if (!snap) return { error: "No percent found — paste the /usage output or type a used %." };
-  saveMuseSubscriptionSnapshot(snap);
-  await Promise.all(
-    loadPlans()
-      .filter((p) => p.engine === "muse" && p.installed)
-      .map((p) => refreshPlanUsage(p))
-  );
-  return { usage: allUsage() };
 });
 
 // new chats start on Auto; engineDefaultEffort is the level Auto runs real work at

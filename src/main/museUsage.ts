@@ -84,7 +84,7 @@ export function parseMuseSessionLog(text: string, now: number): MuseTokenTally {
 // shown live in the Muse TUI's /usage. It is never written to a local file
 // and headless `muse exec --json` does not emit it, so the Platform reads
 // that panel by opening the TUI (usage.ts) and keeps the result as the
-// snapshot below; pasting /usage by hand is the fallback. Windows derived
+// snapshot below. Windows derived
 // from it are marked displayLeft so the usage view shows "% left" instead
 // of "% used".
 export interface MuseSubscriptionSnapshot {
@@ -98,48 +98,8 @@ export interface MuseSubscriptionSnapshot {
   savedAt: number;
 }
 
-export interface MuseSnapshotInput {
-  text?: string;
-  windowUsedPct?: number;
-  weeklyUsedPct?: number;
-  windowResetsAt?: number;
-  weeklyResetsAt?: number;
-  tier?: string;
-}
-
 function clampPct(n: number): number {
   return Math.max(0, Math.min(100, Math.round(n)));
-}
-
-function pctField(v: number | undefined): number | undefined {
-  return typeof v === "number" && Number.isFinite(v) ? clampPct(v) : undefined;
-}
-
-function msField(v: number | undefined): number | undefined {
-  return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : undefined;
-}
-
-// Pasted /usage text, best effort: the first percent is the current window,
-// the second is weekly; ISO reset stamps pair up in the same order. Typed
-// fields always win over anything the paste yielded. Null when no percent
-// can be found at all.
-export function resolveMuseSnapshot(input: MuseSnapshotInput, now = Date.now()): MuseSubscriptionSnapshot | null {
-  const text = input.text ?? "";
-  const pcts = [...text.matchAll(/(\d+(?:\.\d+)?)\s*%/g)].map((m) => Number(m[1]));
-  const stamps = [...text.matchAll(/(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?)/g)].map((m) =>
-    Date.parse(m[1].replace(" ", "T"))
-  );
-  const hours = /(\d+(?:\.\d+)?)\s*-?\s*hours?\b/i.exec(text);
-  const snap: MuseSubscriptionSnapshot = {
-    windowUsedPct: pctField(input.windowUsedPct) ?? (pcts[0] !== undefined ? clampPct(pcts[0]) : undefined),
-    weeklyUsedPct: pctField(input.weeklyUsedPct) ?? (pcts[1] !== undefined ? clampPct(pcts[1]) : undefined),
-    windowResetsAt: msField(input.windowResetsAt) ?? (Number.isFinite(stamps[0]) ? stamps[0] : undefined),
-    weeklyResetsAt: msField(input.weeklyResetsAt) ?? (Number.isFinite(stamps[1]) ? stamps[1] : undefined),
-    windowDurationMins: hours ? Math.round(Number(hours[1]) * 60) : undefined,
-    tier: input.tier?.trim() || undefined,
-    savedAt: now
-  };
-  return snap.windowUsedPct !== undefined || snap.weeklyUsedPct !== undefined ? snap : null;
 }
 
 const MONTHS: Record<string, number> = {

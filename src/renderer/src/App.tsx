@@ -810,61 +810,18 @@ function checkedAt(ms: number): string {
   return new Date(ms).toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-// Muse's subscription percent exists only in its TUI's /usage, so it is
-// pasted here once and stored; the Muse row then shows "% left" like the
-// standalone viewer. Typed percents win over anything in the paste.
-function MuseSnapshotForm({ onSave }: { onSave: (input: { text?: string; windowUsedPct?: number; weeklyUsedPct?: number }) => Promise<string | undefined> }): JSX.Element {
-  const [text, setText] = useState("");
-  const [win, setWin] = useState("");
-  const [week, setWeek] = useState("");
-  const [msg, setMsg] = useState("");
-  const num = (v: string): number | undefined => (v.trim() === "" ? undefined : Number(v));
-  return (
-    <div className="muse-snapshot">
-      <div className="muse-snapshot-head">Muse — usage left</div>
-      <p>
-        This fills itself in: Refresh reads Muse's own <code>/usage</code> panel, the only place its percent
-        exists. If the Muse row ever stays empty, run <code>/usage</code> in Muse, paste what it shows (first
-        percent is the current window, second is weekly), or type the used percents yourself.
-      </p>
-      <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Paste /usage output here…" rows={3} />
-      <div className="muse-snapshot-fields">
-        <label>
-          Window used % <input value={win} onChange={(e) => setWin(e.target.value)} inputMode="decimal" placeholder="35" />
-        </label>
-        <label>
-          Weekly used % <input value={week} onChange={(e) => setWeek(e.target.value)} inputMode="decimal" placeholder="12" />
-        </label>
-        <button
-          className="mini-btn"
-          onClick={() =>
-            void onSave({ text, windowUsedPct: num(win), weeklyUsedPct: num(week) }).then((err) =>
-              setMsg(err ?? "Saved — the Muse row now shows % left.")
-            )
-          }
-        >
-          Save
-        </button>
-      </div>
-      {msg ? <div className="muse-snapshot-msg">{msg}</div> : null}
-    </div>
-  );
-}
-
 // Every plan's hourly (5-hour) and weekly usage on one screen. Claude Max
 // reports its numbers with each reply, so it fills in after the next one.
 function UsageDashboard({
   plans,
   usage,
   onRefresh,
-  onClose,
-  onMuseSnapshot
+  onClose
 }: {
   plans: PlanConfig[];
   usage: Record<string, PlanUsage>;
   onRefresh: () => void;
   onClose: () => void;
-  onMuseSnapshot: (input: { text?: string; windowUsedPct?: number; weeklyUsedPct?: number }) => Promise<string | undefined>;
 }): JSX.Element {
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -923,7 +880,6 @@ function UsageDashboard({
             })}
           </tbody>
         </table>
-        {plans.some((p) => p.engine === "muse") ? <MuseSnapshotForm onSave={onMuseSnapshot} /> : null}
       </div>
     </div>
   );
@@ -3298,11 +3254,6 @@ export default function App() {
           usage={usage}
           onRefresh={() => void window.hub.refreshUsage().then((all) => setUsage({ ...all }))}
           onClose={() => setUsageOpen(false)}
-          onMuseSnapshot={async (input) => {
-            const res = await window.hub.setMuseSnapshot(input);
-            if (res.usage) setUsage({ ...res.usage });
-            return res.error;
-          }}
         />
       ) : null}
       {skillsOpen ? <SkillsDialog onClose={() => setSkillsOpen(false)} /> : null}

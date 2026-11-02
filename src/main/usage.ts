@@ -27,7 +27,7 @@ import {
 // - OpenRouter: its key endpoint (spend against the key's limit)
 // - Codex: its read-only app-server account endpoint, or its latest session file
 // - Muse: token counts summed from its local session logs, plus the
-//   subscription percent from a stored /usage paste (its only source)
+//   subscription percent read from its TUI's /usage panel (its only source)
 // - any engine: a limit error's "resets at" time
 // Nothing here reads login tokens or spends quota.
 
@@ -254,7 +254,7 @@ function findRateLimits(obj: unknown): CodexRateLimits | null {
 
 const MUSE_SNAPSHOT_FILE = join(DATA_DIR, "muse-usage-snapshot.json");
 
-// The stored /usage paste (see museUsage.ts). One Meta account backs every
+// The last /usage panel read (see museUsage.ts). One Meta account backs every
 // Muse plan here, so one snapshot serves them all.
 export function loadMuseSubscriptionSnapshot(): MuseSubscriptionSnapshot | null {
   try {
@@ -353,9 +353,8 @@ export function fetchMuseSubscriptionSnapshot(bin: string): Promise<MuseSubscrip
 
 // Muse publishes no percent-of-plan window of its own; its session logs
 // carry the per-call token counts, so the tally is tokens spent, today and
-// last 7 days. The percent windows come from its /usage panel: fetched live
-// when the stored snapshot is missing or older than ten minutes, pasted by
-// hand (usage:muse-snapshot) only when the fetch cannot run.
+// last 7 days. The percent windows come from its /usage panel, fetched live
+// when the stored snapshot is missing or older than ten minutes.
 export async function refreshMuse(plan: PlanConfig): Promise<void> {
   const tally = readMuseTokenTally(museSessionsRoot());
   if (!tally) return;
