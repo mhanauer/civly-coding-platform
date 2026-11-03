@@ -12,7 +12,7 @@ import type { EngineKind, McpServer } from "./engines/types.ts";
 // Chrome only reaches a Chrome whose extension is signed in to the chat's own
 // claude.ai account, so a chat on an added account browsed as someone else.)
 
-const PROFILE = join(DATA_DIR, "browser");
+export const BROWSER_PROFILE = join(DATA_DIR, "browser");
 // the dev copy has its own browser, so testing never touches the real one
 const PORT = IS_DEV_COPY ? 9338 : 9337;
 export const BROWSER_ENDPOINT = `http://127.0.0.1:${PORT}`;
@@ -57,7 +57,7 @@ async function running(): Promise<boolean> {
 // Chrome reads its preferences at startup and rewrites them on quit, so this
 // runs only while the browser is closed; a running one picks it up next time.
 function setDownloadPrefs(): void {
-  const file = join(PROFILE, "Default", "Preferences");
+  const file = join(BROWSER_PROFILE, "Default", "Preferences");
   let prefs: Record<string, Record<string, unknown>> = {};
   try {
     prefs = JSON.parse(readFileSync(file, "utf8"));
@@ -77,7 +77,7 @@ function setDownloadPrefs(): void {
     }
   };
   mkdirSync(BROWSER_DOWNLOADS, { recursive: true });
-  mkdirSync(join(PROFILE, "Default"), { recursive: true });
+  mkdirSync(join(BROWSER_PROFILE, "Default"), { recursive: true });
   writeFileSync(`${file}.tmp`, JSON.stringify(prefs));
   renameSync(`${file}.tmp`, file);
 }
@@ -101,7 +101,7 @@ async function launch(url?: string): Promise<boolean> {
     "-b",
     "com.google.Chrome",
     "--args",
-    `--user-data-dir=${PROFILE}`,
+    `--user-data-dir=${BROWSER_PROFILE}`,
     `--remote-debugging-port=${PORT}`,
     "--no-first-run",
     "--no-default-browser-check",
@@ -119,17 +119,73 @@ async function launch(url?: string): Promise<boolean> {
 
 let starting: Promise<boolean> | undefined;
 
+const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function startedWithin(tries: number): Promise<boolean> {
+  for (let i = 0; i < tries; i++) {
+    await pause(250);
+    if (await running()) return true;
+  }
+  return false;
+}
+
 // Starts the browser if it is not running. Called at every turn, so a
 // browser you quit comes back with the next message.
 export function ensureBrowser(): Promise<boolean> {
   starting ??= (async () => {
     if (await running()) return true;
     if (!(await launch())) return false;
-    for (let i = 0; i < 40; i++) {
-      await new Promise((r) => setTimeout(r, 250));
-      if (await running()) return true;
-    }
+    return startedWithin(40);
+  })().finally(() => {
+    starting = undefined;
+  });
+  return starting;
+}
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
     return false;
+  }
+}
+
+// Asks Chrome to quit over DevTools, which saves the profile the normal way,
+// and waits for the process to exit so the new one can take the profile. A
+// Chrome that does not quit in 20 seconds is sent SIGTERM.
+async function closeBrowser(pid: number): Promise<boolean> {
+  try {
+    const res = await fetch(`${BROWSER_ENDPOINT}/json/version`, { signal: AbortSignal.timeout(2000) });
+    const { webSocketDebuggerUrl } = (await res.json()) as { webSocketDebuggerUrl: string };
+    const ws = new WebSocket(webSocketDebuggerUrl);
+    ws.onopen = () => ws.send(JSON.stringify({ id: 1, method: "Browser.close" }));
+    ws.onerror = () => undefined;
+  } catch {
+    // SIGTERM below
+  }
+  for (let i = 0; i < 80 && alive(pid); i++) await pause(250);
+  if (alive(pid)) {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      // already gone
+    }
+    for (let i = 0; i < 40 && alive(pid); i++) await pause(250);
+  }
+  return !alive(pid);
+}
+
+// Closes the browser and opens it again on the Chrome now on disk. Skipped
+// while the browser is starting. A chat that starts meanwhile never launches
+// a second Chrome to fight over the profile, but a browser step it takes in
+// the second or so before the new browser answers fails once.
+export function restartBrowser(pid: number): Promise<boolean> {
+  if (starting) return Promise.resolve(false);
+  starting = (async () => {
+    if (!(await closeBrowser(pid))) return false;
+    if (!(await launch())) return false;
+    return startedWithin(40);
   })().finally(() => {
     starting = undefined;
   });

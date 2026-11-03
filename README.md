@@ -175,6 +175,13 @@ It starts with each turn, in the background and without a window, listening
 for DevTools on `127.0.0.1:9337`. Any program on your Mac can drive it through
 that port while it runs. Links you click in the app open in your own browser.
 
+Chrome installs its security fixes only when it restarts, and this browser
+does not restart on its own. Every 15 minutes the app compares the version
+it is running with the Chrome installed on the Mac. When Chrome has updated
+and no chat that browses is working, the app closes the browser and opens it
+again. Site logins are kept. Open tabs are not, so the restart waits until
+they are closed, for up to a day.
+
 ## Settings
 
 Features built for one setup are off until you turn them on in

@@ -21,6 +21,7 @@ import {
   warmBrowserServer
 } from "./chromeBrowser.ts";
 import { showCheck, watchBrowserChecks, type BrowserCheck } from "./browserChecks.ts";
+import { watchBrowserUpdates } from "./browserUpdates.ts";
 import { adoptShellEnv } from "./shellPath.ts";
 import { filterText } from "./filter.ts";
 import { loadSettings, saveSettings, type Settings } from "./settings.ts";
@@ -640,6 +641,9 @@ app.whenReady().then(() => {
     onChange: (list) => mainWindow?.webContents.send("clis:changed", list)
   });
   warmBrowserServer();
+  watchBrowserUpdates({
+    busy: () => [...sessions.values()].some((s) => (s.running || s.turnActive) && usesBrowser(s.plan.engine))
+  });
   watchBrowserChecks({
     endpoint: BROWSER_ENDPOINT,
     active: () => [...sessions.values()].some((s) => (s.running || s.turnActive) && usesBrowser(s.plan.engine)),
