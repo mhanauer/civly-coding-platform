@@ -65,7 +65,7 @@ const CHATGPT_MODELS = ["gpt-6.1-sol", "gpt-6-astra"];
 
 // Frontier and next, exact IDs the CLI accepts (verified against the model
 // IDs recorded in ~/.claude).
-const CLAUDE_MODELS = ["claude-opus-5-5", "claude-fable-5-1"];
+const CLAUDE_MODELS = ["claude-opus-5-5", "claude-fable-5-2"];
 
 const DEFAULT_PLANS: Array<Omit<PlanConfig, "installed">> = [
   {
