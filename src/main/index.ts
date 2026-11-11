@@ -1769,7 +1769,7 @@ ipcMain.handle("browser:downloads", async () => {
 });
 
 ipcMain.handle("usage:refresh", async () => {
-  await Promise.all(loadPlans().filter((p) => p.installed).map((p) => refreshPlanUsage(p)));
+  await Promise.all(loadPlans().filter((p) => p.installed).map((p) => refreshPlanUsage(p, true)));
   return allUsage();
 });
 

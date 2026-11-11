@@ -1,12 +1,13 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { DATA_DIR } from "./store.ts";
 import type { PlanConfig, UsageWindow } from "./engines/types.ts";
 import { engineHome } from "./accounts.ts";
 import { resetTimeFromText } from "./limitFallback.ts";
-import { resolveBin } from "./engines/index.ts";
+import { engineEnv, resolveBin } from "./engines/index.ts";
+import { rateLimitUsage, type RateLimitInfo } from "./engines/claude.ts";
 import {
   codexWindowLabel,
   readCodexAccountUsage,
@@ -22,14 +23,17 @@ import {
 } from "./museUsage.ts";
 
 // How much of each plan is used, and when it resets. Sources, all read-only:
-// - Claude Max: the usage report Claude Code streams with every reply
+// - Claude subscriptions: the usage report Claude Code streams with every
+//   reply. A plan marked out gets no replies, so it is asked on its own
+//   (refreshClaudeLimit below).
 // - Z.ai: its quota endpoint, called with the plan's own API key
 // - OpenRouter: its key endpoint (spend against the key's limit)
 // - Codex: its read-only app-server account endpoint, or its latest session file
 // - Muse: token counts summed from its local session logs, plus the
 //   subscription percent read from its TUI's /usage panel (its only source)
 // - any engine: a limit error's "resets at" time
-// Nothing here reads login tokens or spends quota.
+// Nothing here reads login tokens. Only the recheck of a Claude plan marked
+// out can spend quota: one short Haiku message, once, when the plan is back.
 
 export interface PlanUsage {
   windows: UsageWindow[];
@@ -385,13 +389,135 @@ export async function refreshMuse(plan: PlanConfig): Promise<void> {
   save();
 }
 
-// Polls the plans that can be asked directly. Claude Max updates itself
-// from each reply; Codex uses its account endpoint with a session fallback.
-export async function refreshPlanUsage(plan: PlanConfig): Promise<void> {
+// What one line of Claude Code's stream says about the plan's limit: its
+// usage report, "stop" when the run has nothing more to tell (it finished, or
+// it is waiting out the limit), or null to keep reading.
+// exported for tests
+export function claudeLimitFromLine(line: string): { windows: UsageWindow[]; limited: boolean } | "stop" | null {
+  if (!/"(?:rate_limit_event|api_retry|result)"/.test(line)) return null;
+  let obj: {
+    type?: string;
+    subtype?: string;
+    error?: string;
+    error_status?: number;
+    rate_limit_info?: RateLimitInfo;
+  };
+  try {
+    obj = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (obj.type === "rate_limit_event" && obj.rate_limit_info) return rateLimitUsage(obj.rate_limit_info);
+  if (obj.type === "result") return "stop";
+  if (obj.type === "system" && obj.subtype === "api_retry" && (obj.error === "rate_limit" || obj.error_status === 429)) {
+    return "stop";
+  }
+  return null;
+}
+
+// Sends one short message on the plan and stops at the first usage report.
+// A plan that is out refuses the message, which costs nothing. Null when the
+// CLI gave no report in time.
+// exported for tests
+export function readClaudeLimit(
+  bin: string,
+  extraArgs: string[],
+  env: Record<string, string>,
+  timeoutMs = 45_000
+): Promise<{ windows: UsageWindow[]; limited: boolean } | null> {
+  return new Promise((resolve) => {
+    let proc: ReturnType<typeof spawn>;
+    try {
+      proc = spawn(
+        bin,
+        [
+          ...extraArgs,
+          "-p",
+          "Reply with the single word ok.",
+          "--model",
+          "haiku",
+          "--output-format",
+          "stream-json",
+          "--verbose",
+          // nothing of this run is kept, and it loads no connectors or skills
+          "--no-session-persistence",
+          "--strict-mcp-config",
+          "--disable-slash-commands",
+          "--no-chrome"
+        ],
+        { cwd: tmpdir(), env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "ignore"] }
+      );
+    } catch {
+      resolve(null);
+      return;
+    }
+    let buffer = "";
+    let settled = false;
+    const done = (result: { windows: UsageWindow[]; limited: boolean } | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      try {
+        proc.kill("SIGKILL");
+      } catch {
+        // already gone
+      }
+      // a helper the CLI started may still hold the pipe open
+      proc.stdout?.destroy();
+      resolve(result);
+    };
+    const timeout = setTimeout(() => done(null), timeoutMs);
+    proc.on("error", () => done(null));
+    proc.on("close", () => done(null));
+    proc.stdout?.on("data", (chunk: Buffer) => {
+      buffer += chunk.toString();
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const told = claudeLimitFromLine(line);
+        if (told) return done(told === "stop" ? null : told);
+      }
+    });
+  });
+}
+
+// A Claude subscription's usage arrives only with a reply, and a plan marked
+// out gets none: its messages go to the next plan (index.ts). A limit lifted
+// before its reset time, such as a reset bought or granted on Anthropic's
+// side, would stay unseen until that time. So a plan marked out is asked on
+// its own: when a view asks (force), otherwise at most every 30 minutes.
+const CLAUDE_RECHECK_MS = 30 * 60_000;
+const claudeAsked = new Map<string, number>();
+const claudeAsking = new Map<string, Promise<void>>();
+
+export function refreshClaudeLimit(plan: PlanConfig, force = false): Promise<void> {
+  const saved = allUsage()[plan.id];
+  if (saved?.limitedUntil === undefined) return Promise.resolve();
+  const running = claudeAsking.get(plan.id);
+  if (running) return running;
+  const last = Math.max(saved.updatedAt, claudeAsked.get(plan.id) ?? 0);
+  if (!force && Date.now() - last < CLAUDE_RECHECK_MS) return Promise.resolve();
+  claudeAsked.set(plan.id, Date.now());
+  const asking = readClaudeLimit(resolveBin(plan.bin), plan.extraArgs, engineEnv(plan))
+    .then((told) => {
+      // a reply on the plan may have cleared the limit while this ran
+      if (told && usage[plan.id]?.limitedUntil !== undefined) recordUsage(plan.id, told.windows, told.limited);
+    })
+    .finally(() => claudeAsking.delete(plan.id));
+  claudeAsking.set(plan.id, asking);
+  return asking;
+}
+
+// Polls the plans that can be asked directly. A Claude subscription updates
+// itself from each reply, and is asked only while it is marked out; Codex
+// uses its account endpoint with a session fallback. `force` is a view
+// asking for fresh numbers now.
+export async function refreshPlanUsage(plan: PlanConfig, force = false): Promise<void> {
   const base = plan.env?.ANTHROPIC_BASE_URL ?? "";
   try {
     if (plan.engine === "claude" && /api\.z\.ai/.test(base)) await refreshZai(plan);
     else if (plan.engine === "claude" && /openrouter\.ai/.test(base)) await refreshOpenRouter(plan);
+    else if (plan.engine === "claude" && !base) await refreshClaudeLimit(plan, force);
     else if (plan.engine === "codex") await refreshCodex(plan);
     else if (plan.engine === "muse") await refreshMuse(plan);
   } catch {

@@ -139,6 +139,10 @@ plan with quota, and the chat says so. If an engine reports its plan is out but
 waits for the reset instead of failing, the app stops it after 10 seconds and
 moves on the same way. That includes a Claude chat whose turn failed on the
 limit while a background agent or command kept it open.
+A Claude subscription marked out is asked again every 30 minutes, and whenever
+the Usage or Accounts view opens, so a limit lifted before its reset time (a
+reset you bought or were given) shows up without waiting for that time. The
+check is one short Haiku message; a plan that is still out refuses it at no cost.
 If every signed-in plan is out, add an account or send the request again after
 a reset.
 When a model is at capacity ("Selected model is at capacity", or an overloaded

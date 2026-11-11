@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -22,6 +22,12 @@ const dataDir = mkdtempSync(join(tmpdir(), "cph-limit-"));
 process.env.CPH_DATA_DIR = dataDir;
 const oldReset = Date.now() + 3_600_000;
 writeFileSync(join(dataDir, "usage.json"), JSON.stringify({
+  // marked out two days ago, with its reset still a day off
+  staleSales: {
+    windows: [{ label: "Weekly", usedPct: 100, resetsAt: Date.now() + 86_400_000 }],
+    limitedUntil: Date.now() + 86_400_000,
+    updatedAt: Date.now() - 2 * 86_400_000
+  },
   oldClaude: { windows: [{ label: "Weekly", usedPct: 100, resetsAt: oldReset }], limitedUntil: 0, updatedAt: Date.now() },
   resetClaude: { windows: [{ label: "5-hour", usedPct: 100, resetsAt: Date.now() - 1_000 }], limitedUntil: 0, updatedAt: Date.now() }
 }));
@@ -148,6 +154,57 @@ test("Claude Code waiting out a usage limit reports the plan as out", () => {
   assert.deepEqual(events, []);
   adapter.parseLine(retry(3 * 86_400_000), emit);
   assert.deepEqual(events, [{ kind: "usage", windows: [], limited: true }]);
+});
+
+test("a Claude plan marked out is asked again, and a limit lifted early clears", async () => {
+  const reset = Math.floor(Date.now() / 1000) + 86_400;
+  const report = (status: string, utilization: number): string => JSON.stringify({
+    type: "rate_limit_event",
+    rate_limit_info: { status, unifiedWindows: { seven_day: { utilization, resetsAt: reset } } }
+  });
+  const back = [{ label: "Weekly", usedPct: 0, resetsAt: reset * 1000 }];
+  assert.deepEqual(usage.claudeLimitFromLine(report("allowed", 0)), { windows: back, limited: false });
+  assert.equal((usage.claudeLimitFromLine(report("rejected", 1)) as { limited: boolean }).limited, true);
+  assert.equal(usage.claudeLimitFromLine(JSON.stringify({ type: "result", is_error: true, result: "limit" })), "stop");
+  assert.equal(usage.claudeLimitFromLine(JSON.stringify({
+    type: "system", subtype: "api_retry", retry_delay_ms: 86_400_000, error_status: 429, error: "rate_limit"
+  })), "stop");
+  assert.equal(usage.claudeLimitFromLine(JSON.stringify({ type: "system", subtype: "init" })), null);
+  assert.equal(usage.claudeLimitFromLine("not json \"result\""), null);
+
+  // a stand-in CLI: notes that it ran, reports the limit, then stays open the
+  // way Claude Code does while it answers or waits for a reset
+  const cli = (name: string, line: string): string => {
+    const path = join(dataDir, name);
+    writeFileSync(path, `#!/bin/sh\ntouch "${path}.ran"\necho '${line}'\nexec sleep 30\n`, { mode: 0o755 });
+    return path;
+  };
+  const backCli = cli("claude-back", report("allowed", 0));
+  const outCli = cli("claude-out", report("rejected", 1));
+
+  // the ten-minute check asks a plan whose mark is old
+  await usage.refreshPlanUsage({ ...plan("staleSales", "claude"), bin: backCli });
+  assert.equal(usage.allUsage().staleSales.limitedUntil, undefined);
+  assert.deepEqual(usage.allUsage().staleSales.windows, back);
+
+  // a plan marked out a moment ago waits for a view to ask
+  const sales: PlanConfig = { ...plan("sales", "claude"), bin: outCli };
+  usage.recordUsage("sales", [{ label: "Weekly", usedPct: 100, resetsAt: reset * 1000 - 3_600_000 }], true);
+  await usage.refreshPlanUsage(sales);
+  assert.equal(existsSync(`${outCli}.ran`), false);
+  // still out: the mark stays, with the reset time just reported
+  await usage.refreshPlanUsage(sales, true);
+  assert.equal(usage.allUsage().sales.limitedUntil, reset * 1000);
+  await usage.refreshPlanUsage({ ...sales, bin: backCli }, true);
+  assert.equal(usage.allUsage().sales.limitedUntil, undefined);
+
+  // a plan with quota is never asked, and neither is a key plan
+  const idleCli = cli("claude-idle", report("rejected", 1));
+  await usage.refreshPlanUsage({ ...sales, bin: idleCli }, true);
+  usage.recordUsage("keyed", [{ label: "Weekly", usedPct: 100, resetsAt: reset * 1000 }], true);
+  await usage.refreshPlanUsage({ ...plan("keyed", "claude"), bin: idleCli, env: { ANTHROPIC_BASE_URL: "https://example.invalid" } }, true);
+  assert.equal(existsSync(`${idleCli}.ran`), false);
+  assert.equal(usage.allUsage().sales.limitedUntil, undefined);
 });
 
 test("a session limit with only a reset time counts, and resets at the next such time", () => {

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
-import type { BackgroundTask, EngineAdapter, EngineEvent, SendOptions, TokenCount } from "./types.ts";
+import type { BackgroundTask, EngineAdapter, EngineEvent, SendOptions, TokenCount, UsageWindow } from "./types.ts";
 import { classifyTool } from "./steps.ts";
 import { denyMessage } from "./claudeDeny.ts";
 import { isLimitError } from "../limitFallback.ts";
@@ -27,7 +27,7 @@ interface ControlRequest {
   permission_suggestions?: Array<{ type?: string }>;
 }
 
-interface RateLimitInfo {
+export interface RateLimitInfo {
   status?: string;
   unifiedWindows?: Record<string, { utilization?: number; resetsAt?: number }>;
 }
@@ -38,6 +38,17 @@ const WINDOW_LABELS: Record<string, string> = {
   seven_day_opus: "Weekly (Opus)",
   seven_day_sonnet: "Weekly (Sonnet)"
 };
+
+// The usage report Claude Code sends with a reply, as the app's windows.
+// "rejected" is the plan out of quota.
+export function rateLimitUsage(info: RateLimitInfo): { windows: UsageWindow[]; limited: boolean } {
+  const windows = Object.entries(info.unifiedWindows ?? {}).map(([key, w]) => ({
+    label: WINDOW_LABELS[key] ?? key.replace(/_/g, " "),
+    usedPct: Math.round((w.utilization ?? 0) * 100),
+    resetsAt: w.resetsAt ? w.resetsAt * 1000 : undefined
+  }));
+  return { windows, limited: info.status === "rejected" };
+}
 
 interface ModelUsage {
   inputTokens?: number;
@@ -288,13 +299,7 @@ export function claudeAdapter(): EngineAdapter {
       }
 
       if (obj.type === "rate_limit_event" && obj.rate_limit_info) {
-        const info = obj.rate_limit_info;
-        const windows = Object.entries(info.unifiedWindows ?? {}).map(([key, w]) => ({
-          label: WINDOW_LABELS[key] ?? key.replace(/_/g, " "),
-          usedPct: Math.round((w.utilization ?? 0) * 100),
-          resetsAt: w.resetsAt ? w.resetsAt * 1000 : undefined
-        }));
-        emit({ kind: "usage", windows, limited: info.status === "rejected" });
+        emit({ kind: "usage", ...rateLimitUsage(obj.rate_limit_info) });
         return;
       }
 
